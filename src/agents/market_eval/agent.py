@@ -2,7 +2,7 @@
 검색만으로 조사함. RAG 미사용(5장: 답이 논문이 아니라 시장 리포트·산업 기사에 있음).
 
 입력: state["tech_profiles"], state["techs"]
-출력: {"market_result": ..., "evidence": [...]}
+출력: {"market_result": ..., "raw_evidence": [...]}
 
 두 기술 모두 같은 질의 템플릿·같은 횟수로 실행해 10장 중립성(대칭 질의) 원칙을
 지킴. 앵커 키워드(TechSpec.search_anchor)만 값이 다름.
@@ -52,45 +52,67 @@ class MarketEvalAgent(BaseAgent):
 
     def run(self, state: AgentState) -> dict[str, Any]:
         techs = state["techs"]
+        is_retry = self.name in (state.get("retry_targets") or [])
         new_evidence: list[Evidence] = []
-        next_id = self.next_evidence_id(state)
+        ordinal = 0
         by_tech: dict[str, TechViewResult] = {}
         llm = get_generation_llm().with_structured_output(TechViewResult)
 
         for tech in techs:
             passages: list[str] = []
             tech_evidence: list[Evidence] = []
+            local_id_to_key: dict[int, str] = {}
             for template in _QUERY_TEMPLATES:
                 query = template.format(tech=tech.name, anchor=tech.search_anchor)
                 for r in web_search(query, max_results=3):
+                    evidence_key = self.provisional_evidence_key(state, tech.name, ordinal)
                     evidence = Evidence(
-                        id=next_id,
+                        key=evidence_key,
                         tech=tech.name,
                         perspective="market",
-                        stance="지지",  # 기본값. 아래 counter_facts에 인용되면 반대로 조정함
+                        stance="반대" if is_retry else "지지",  # 기본값. 아래 분류 결과로 조정함
                         source_type="웹",
                         source=r.url,
                         quote=r.content[:200],
                     )
                     tech_evidence.append(evidence)
-                    passages.append(f"[근거#{next_id}] {r.content[:300]}")
-                    next_id += 1
+                    local_id = ordinal + 1
+                    local_id_to_key[local_id] = evidence_key
+                    # LLM에는 짧은 로컬 정수로 보여줌 — 긴 provisional key를 그대로
+                    # 되읊게 하면 오탈자·환각 위험이 커서, 응답은 로컬 정수로 받고
+                    # 아래에서 evidence_keys로 되돌림.
+                    passages.append(f"[근거#{local_id}] {r.content[:300]}")
+                    ordinal += 1
 
-            valid_ids = {e.id for e in tech_evidence}
+            valid_local_ids = set(local_id_to_key)
             view_result: TechViewResult = llm.invoke(
                 _EXTRACTION_PROMPT.format(tech=tech.name, passages="\n\n".join(passages))
             )  # type: ignore[assignment]
 
-            # 환각 근거 번호 방지: 실제로 수집한 evidence_id만 남김(7.10절 안전장치와 동일 원칙)
+            # 환각 근거 번호 방지 + 로컬 정수 -> provisional key 역매핑
+            # (7.10절 인용 안전장치와 동일 원칙)
             for claim in view_result.confirmed_facts + view_result.counter_facts:
-                claim.evidence_ids = [i for i in claim.evidence_ids if i in valid_ids]
+                kept = [i for i in claim.evidence_ids if i in valid_local_ids]
+                claim.evidence_ids = []
+                claim.evidence_keys = [local_id_to_key[i] for i in kept]
 
-            counter_ids = {i for claim in view_result.counter_facts for i in claim.evidence_ids}
+            confirmed_keys = {
+                k for claim in view_result.confirmed_facts for k in claim.evidence_keys
+            }
+            counter_keys = {
+                k for claim in view_result.counter_facts for k in claim.evidence_keys
+            }
             for e in tech_evidence:
-                if e.id in counter_ids:
+                if e.key in counter_keys:
                     e.stance = "반대"
+                elif e.key in confirmed_keys:
+                    e.stance = "지지"
 
             new_evidence.extend(tech_evidence)
             by_tech[tech.name] = view_result
 
-        return {"market_result": ViewResult(by_tech=by_tech), "evidence": new_evidence}
+        return {
+            "market_result": ViewResult(by_tech=by_tech),
+            "raw_evidence": new_evidence,
+            "evidence": new_evidence,
+        }

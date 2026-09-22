@@ -81,7 +81,8 @@ def main() -> None:
     result = agent.run(FIXTURE_STATE)
     output_text = render_view_result_md(result["stakeholder_result"])
     evidence_text = "\n".join(
-        f"[근거#{e.id}] ({e.tech}, {e.stance}) {e.quote}" for e in result["evidence"]
+        f"[근거#{e.id if e.id is not None else e.key}] ({e.tech}, {e.stance}) {e.quote}"
+        for e in result["evidence"]
     )
 
     judge_llm = get_judge_llm()
