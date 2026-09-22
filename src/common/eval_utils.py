@@ -21,6 +21,8 @@ from matplotlib import font_manager, rcParams
 from matplotlib import pyplot as plt
 from pydantic import BaseModel, Field
 
+from src.common.state import ViewResult
+
 # 한글 라벨이 깨지지 않도록, 설치돼 있는 한글 폰트를 찾아서 씀(없으면 기본값 유지).
 for _font_name in ("AppleGothic", "Malgun Gothic", "NanumGothic", "Noto Sans CJK KR"):
     if _font_name in {f.name for f in font_manager.fontManager.ttflist}:
@@ -154,6 +156,36 @@ def plot_bar_comparison(
 # ---------------------------------------------------------------------------
 
 
+def render_view_result_md(view_result: ViewResult) -> str:
+    """ViewResult를 사람이 읽는 마크다운으로 직렬화함.
+
+    test_runner.py 리포트에 str(view_result)(파이썬 repr, 한 줄로 뭉개짐)를 그대로
+    박아 넣으면 읽기 어려워서 대신 씀. 채점용 target_text에도 이 형태를 쓰면
+    루브릭 채점 모델도 더 안정적으로 읽음.
+    """
+    def _refs(c) -> str:
+        # 최종화 전(id 미확정) 단계에서는 evidence_keys를, 최종화 후에는
+        # evidence_ids를 씀 — 최종화 여부와 무관하게 실제로 있는 쪽을 보여줌.
+        ids = ", ".join(f"#{i}" for i in c.evidence_ids)
+        keys = ", ".join(c.evidence_keys)
+        return ids or keys or "근거 없음"
+
+    lines: list[str] = []
+    for tech, tv in view_result.by_tech.items():
+        lines.append(f"### {tech}\n")
+        lines.append("**확인된 사실**")
+        for c in tv.confirmed_facts:
+            lines.append(f"- {c.statement} ({_refs(c)})")
+        lines.append("\n**반대/우려 사실**")
+        for c in tv.counter_facts:
+            lines.append(f"- {c.statement} ({_refs(c)})")
+        lines.append("\n**미확인 항목**")
+        for item in tv.unconfirmed_items:
+            lines.append(f"- {item}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 class RubricScore(BaseModel):
     accuracy: int = Field(ge=1, le=5, description="정확성: 인용한 근거와 실제로 부합하는가")
     completeness: int = Field(ge=1, le=5, description="완전성: 필수 항목이 빠짐없이 포함되는가")
@@ -238,8 +270,13 @@ class CoverageResult(BaseModel):
 def score_required_items(judge_llm: Any, view_text: str, tech: str, required_items: list[str]) -> CoverageResult:
     """9장 평가 기준표의 필수 항목이 기술별 ViewResult에 실제로 담겼는지 LLM 채점자가 항목별로 판정함."""
     prompt = (
-        f"다음은 '{tech}' 기술에 대한 관점 평가 결과임. 아래 필수 항목 각각이 "
-        "결과 안에 실제 근거와 함께 서술돼 있는지 항목별로 판정해줘. 항목명은 그대로 돌려줘.\n\n"
+        f"다음은 '{tech}' 기술에 대한 관점 평가 결과임. 아래 필수 항목 각각에 대해, "
+        "평가 결과의 확인된 사실/반대 사실 중 그 항목과 주제상 관련된 문장이 하나라도 있으면 "
+        "covered=true로 판정해줘 — 항목명이 문장에 그대로 쓰여 있을 필요는 없고, 내용상 그 "
+        "항목을 뒷받침하거나 설명하면 충분함(예: '투자 업계의 평가' 항목은 '투자자'·'애널리스트'·"
+        "'기관투자가'·'주가' 같은 표현이 들어간 문장이면 포함으로 봄). 관련 문장이 정말 하나도 "
+        "없을 때만 covered=false로 판정하고, reason에는 어떤 문장을 근거로 판단했는지(또는 왜 "
+        "없다고 판단했는지) 간단히 적어줘. 항목명은 그대로 돌려줘.\n\n"
         "[필수 항목]\n" + "\n".join(f"- {i}" for i in required_items)
         + f"\n\n[평가 결과]\n{view_text}"
     )

@@ -401,6 +401,11 @@ def extract_view_result(
         "statement 문장 안에는 [근거#N] 같은 번호 표기를 쓰지 않음\n"
         "3. 발췌에 없는 내용을 지어내지 말고, 확인되지 않는 필수 항목은 unconfirmed_items에 항목명을 그대로 적음\n"
         "4. 다른 기술과의 우열 판정 표현(더 우수함, 뒤처짐 등)은 쓰지 않음\n"
+        "5. 각 문장이 위 필수 항목 중 정확히 어떤 항목에 대한 서술인지 나중에 다른 사람이 "
+        "한눈에 알아볼 수 있도록, 그 항목의 핵심 용어를 문장 안에 자연스럽게 포함시켜줘 "
+        "(예: '투자 업계의 평가'에 대한 문장이면 '투자자'·'애널리스트' 같은 표현을 넣음). "
+        "발췌 내용이 필수 항목과 간접적으로만 관련돼도, 그 항목과 관련지어 서술할 수 있으면 "
+        "unconfirmed_items로 넘기지 말고 confirmed_facts/counter_facts에 포함시켜줘\n"
         + (extra_instructions + "\n" if extra_instructions else "")
         + prior_block
         + "\n\n[발췌]\n"
