@@ -38,6 +38,19 @@ from src.common.state import (
 )
 
 _CITATION_RE = re.compile(r"\[근거#(\d+)\]")
+# synthesize 등 상위 노드가 "[근거#25,#26, 27]"처럼 한 괄호에 여러 번호를 넣는 경우가 있음.
+# 인용 안전장치와 REFERENCE 집계는 [근거#N] 단일 토큰만 세므로, 조립 직후 이를 풀어 씀.
+_MULTI_CITATION_RE = re.compile(r"\[근거#\s*\d+(?:\s*,\s*#?\s*\d+)+\s*\]")
+
+
+def normalize_citations(text: str) -> str:
+    """[근거#25,#26, 27] -> [근거#25][근거#26][근거#27]. 단일 토큰은 그대로 둠."""
+
+    def _expand(m: re.Match) -> str:
+        nums = re.findall(r"\d+", m.group(0))
+        return "".join(f"[근거#{n}]" for n in nums)
+
+    return _MULTI_CITATION_RE.sub(_expand, text)
 _OUTPUT_DIR = Path("output")
 _REPORT_OUTPUT_PATH = _OUTPUT_DIR / "report.md"
 _REPORT_PDF_PATH = _OUTPUT_DIR / "report.pdf"
@@ -483,6 +496,7 @@ class ReportAgent(BaseAgent):
             "6. 한계점": render_limitations(judge_feedback, collect_unconfirmed_items(*view_results)),
         }
 
+        sections = {title: normalize_citations(body) for title, body in sections.items()}
         polished_sections = {
             title: polish_and_verify(body, valid_ids) for title, body in sections.items()
         }
