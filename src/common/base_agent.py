@@ -57,6 +57,15 @@ class BaseAgent(ABC):
             return base_query
         return rewrite_query(base_query, tech)
 
+    def scoped_techs(self, state: AgentState) -> list:
+        """이 실행이 처리할 기술 목록. graph.py가 Send로 tech_scope를 넣어 주면 그 기술
+        하나만, 없으면 techs 전체(독립 실행 스크립트·레거시 호환)."""
+        techs = list(state.get("techs", []) or [])
+        scope = state.get("tech_scope")
+        if scope:
+            techs = [t for t in techs if t.name == scope]
+        return techs
+
     def new_evidence(
         self,
         state: AgentState,

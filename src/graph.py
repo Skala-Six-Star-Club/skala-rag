@@ -6,21 +6,25 @@
 노드 하나만 따로 돌리므로 이 파일과 무관함(schedule.md 2절). 이 파일은 전 에이전트가
 붙은 뒤의 "통합 실행"(schedule.md 1절, 8.3 Agent System 지표)에 쓰임.
 
-    select_tech -> tech_research -> [trl_eval | market_eval | stakeholder_eval | domain_eval]
-        -> evidence_check --(근거 부족, 재시도 0회)--> 부족한 관점 노드만 다시 -> evidence_check
+    select_tech -> tech_research -> Send x (관점 4 x 기술 N): [trl_eval | market_eval | stakeholder_eval | domain_eval]
+        -> evidence_check --(근거 부족, 재시도 0회)--> 부족한 (관점, 기술)만 Send로 다시 -> evidence_check
         -> evidence_finalize -> synthesize -> judge --(위반 발견, 재작성 0회)--> synthesize
         -> report
 
 구현 시 지킨 12장 규칙:
-- 병렬 분기: tech_research 뒤에 관점 노드 4개를 같은 superstep에서 동시 실행함.
+- 병렬 분기: tech_research 뒤에 관점 노드 4개를 기술별로 나눠(Send, `fan_out_views`) 같은
+  superstep에서 동시 실행함. 각 호출은 전체 state에 `tech_scope`(기술명 하나)를 얹어 받고,
+  `BaseAgent.scoped_techs`가 그 기술만 처리함. 같은 관점 필드(`trl_result` 등)에 두 호출이
+  동시에 쓰므로 state.py의 `merge_view_results` reducer가 by_tech를 기술 키로 합침.
 - 합류: 관점 노드 4개 각각에서 evidence_check로 일반 edge를 둠. 같은 superstep에 실행된
   노드들의 완료 신호는 다음 superstep에 한 번에 모이므로 evidence_check는 1회만 실행됨.
   `add_edge([4개], "evidence_check")` 형태의 barrier 합류를 쓰지 않은 이유는, 반복 1에서
   부족한 관점 노드만 재실행할 때 4개가 전부 도착하지 않아 evidence_check가 영영 깨어나지
   않기 때문임.
-- 반복 1: evidence_check가 채운 `retry_targets`(노드 이름 목록)로 해당 노드만 재실행함.
-  각 관점 노드는 `self.name in state["retry_targets"]`로 재검색 초점을 바꿈. 횟수 예산
-  (1회)은 evidence_check가 `retry_count`로 관리하고, 그래프는 안전장치로 한 번 더 확인함.
+- 반복 1: evidence_check가 채운 `retry_targets`(노드 이름)와 `retry_scopes`(노드 -> 부족한
+  기술)로 부족한 (관점, 기술)만 Send로 재실행함. 각 관점 노드는 `self.name in
+  state["retry_targets"]`로 재검색 초점을 바꿈. 횟수 예산(1회)은 evidence_check가
+  `retry_count`로 관리하고, 그래프는 안전장치로 한 번 더 확인함.
 - Evidence ID 확정: evidence_check가 끝난 뒤 내부 finalizer가 임시 key를 정렬하고
   연속 정수 ID를 부여한다. 이 노드는 비즈니스 에이전트 수에 포함하지 않는다.
 - 반복 2: judge_feedback에 위반이 있고 재작성 예산(1회)이 남아 있으면 synthesize로 돌아감.
@@ -41,6 +45,7 @@ from typing import Any
 from langchain_community.vectorstores import FAISS
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Send
 
 from src.common import config
 from src.common.doc_pool import DOC_POOL_SPECS
@@ -103,16 +108,42 @@ def _normalize_parallel_update(node_name: str, node: NodeFn) -> NodeFn:
 # ---------------------------------------------------------------------------
 
 
-def route_after_evidence_check(state: AgentState) -> list[str] | str:
-    """evidence_check 뒤: 재검색 대상 관점 노드 목록 또는 evidence_finalize.
+def _send_view(node: str, state: AgentState, tech: str) -> Send:
+    """관점 노드를 (관점, 기술) 단위로 호출하는 Send. 노드는 payload를 state로 받으므로
+    전체 state에 tech_scope만 얹어 보냄(BaseAgent.scoped_techs가 이 값으로 기술을 고름)."""
+    return Send(node, {**state, "tech_scope": tech})
 
-    evidence_check(7.7)가 예산을 소진했으면 retry_targets를 비워 보내고 ID 최종화로
-    진행한다. retry_count가 상한을 넘었는데도 targets가 남아 있는 비정상 상황은
-    무한 루프 대신 최종화로 진행시킴(12장 "조건 분기").
+
+def fan_out_views(state: AgentState) -> list[Send]:
+    """tech_research 뒤: 관점 노드 4개 x 기술 N개를 같은 superstep에서 병렬 실행함.
+
+    노드 단위(4개)가 아니라 (관점, 기술) 단위(4 x N)로 나누는 이유는 (1) 기술별 검색과
+    LLM 호출이 서로 독립이라 실행 시간이 기술 수만큼 줄고, (2) 반복 1에서 부족한
+    기술만 골라 재검색할 수 있기 때문(evidence_check의 retry_scopes). 관점 결과는
+    state.merge_view_results reducer가 기술 키로 합침.
+    """
+    techs = [t.name for t in state.get("techs", []) or []]
+    return [_send_view(view, state, tech) for view in VIEW_NODES for tech in techs]
+
+
+def route_after_evidence_check(state: AgentState) -> list[Send] | str:
+    """evidence_check 뒤: 부족한 (관점, 기술)만 재검색하거나 evidence_finalize로.
+
+    evidence_check(7.7)가 retry_targets(노드)와 retry_scopes(노드 -> 부족한 기술)를
+    채움. scopes에 없는 노드는 전체 기술을 다시 검색함(구 evidence_check 호환).
+    예산을 소진했으면 retry_targets가 비어 오고 ID 최종화로 진행함. retry_count가
+    상한을 넘었는데도 targets가 남아 있는 비정상 상황은 무한 루프 대신 최종화로
+    진행시킴(12장 "조건 분기").
     """
     targets = [t for t in (state.get("retry_targets") or []) if t in VIEW_NODES]
     if targets and state.get("retry_count", 0) <= MAX_RETRY:
-        return targets
+        all_techs = [t.name for t in state.get("techs", []) or []]
+        scopes = state.get("retry_scopes") or {}
+        return [
+            _send_view(node, state, tech)
+            for node in targets
+            for tech in (scopes.get(node) or all_techs)
+        ]
     return NODE_EVIDENCE_FINALIZE
 
 
@@ -158,12 +189,12 @@ def build_graph(nodes: dict[str, NodeFn]) -> CompiledStateGraph:
     graph.add_edge(START, NODE_SELECT_TECH)
     graph.add_edge(NODE_SELECT_TECH, NODE_TECH_RESEARCH)
 
-    # 병렬 분기 + 합류 (모듈 docstring의 합류 방식 설명 참고)
+    # 병렬 분기: (관점, 기술) 단위 Send fan-out + 합류 (모듈 docstring 참고)
+    graph.add_conditional_edges(NODE_TECH_RESEARCH, fan_out_views, list(VIEW_NODES))
     for view in VIEW_NODES:
-        graph.add_edge(NODE_TECH_RESEARCH, view)
         graph.add_edge(view, NODE_EVIDENCE_CHECK)
 
-    # 반복 1: 부족한 관점만 재검색, 아니면 종합으로
+    # 반복 1: 부족한 (관점, 기술)만 재검색, 아니면 종합으로
     graph.add_conditional_edges(
         NODE_EVIDENCE_CHECK,
         route_after_evidence_check,

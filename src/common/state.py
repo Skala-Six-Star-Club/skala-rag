@@ -91,6 +91,22 @@ class ViewResult(BaseModel):
     by_tech: dict[str, TechViewResult] = Field(default_factory=dict)
 
 
+def merge_view_results(left: ViewResult | None, right: ViewResult | None) -> ViewResult:
+    """관점 결과 reducer. 같은 관점 노드가 (관점, 기술) 단위로 병렬 실행되면(graph.py의
+    Send fan-out) 두 실행이 같은 superstep에 각각 한 기술의 ViewResult를 돌려주므로,
+    덮어쓰기 대신 by_tech를 기술 키로 합침. 같은 기술은 나중 값(재검색 결과)이 이김.
+    evidence_check가 그라운딩 필터를 거친 결과를 되돌려 줄 때도 같은 규칙으로 반영됨."""
+    if right is None:
+        return left if left is not None else ViewResult()
+    if left is None:
+        return right if isinstance(right, ViewResult) else ViewResult.model_validate(right)
+    left = left if isinstance(left, ViewResult) else ViewResult.model_validate(left)
+    right = right if isinstance(right, ViewResult) else ViewResult.model_validate(right)
+    merged = dict(left.by_tech)
+    merged.update(right.by_tech)
+    return ViewResult(by_tech=merged)
+
+
 class Conflict(BaseModel):
     topic: str
     explanation: str  # 왜 갈리는지(단순 나열 금지, 7.8)
@@ -123,10 +139,15 @@ class AgentState(TypedDict, total=False):
     domain: str
     tech_profiles: dict[str, TechProfile]
 
-    trl_result: ViewResult
-    market_result: ViewResult
-    stakeholder_result: ViewResult
-    domain_result: ViewResult
+    # (관점, 기술) 단위 병렬 실행이 같은 관점 필드에 동시에 쓰므로 기술 키로 합침
+    trl_result: Annotated[ViewResult, merge_view_results]
+    market_result: Annotated[ViewResult, merge_view_results]
+    stakeholder_result: Annotated[ViewResult, merge_view_results]
+    domain_result: Annotated[ViewResult, merge_view_results]
+
+    # Send fan-out으로 관점 노드를 호출할 때 그래프가 넣어 주는 실행 범위(기술명 하나).
+    # 없으면 노드는 techs 전체를 처리함(독립 실행 스크립트, 레거시 호환).
+    tech_scope: str
 
     # 여러 병렬 노드가 쓰는 누적 영역. evidence_finalize 이후에도 감사/디버깅용으로
     # 남겨 두지만, 보고서와 인용 검증은 아래의 확정된 evidence를 사용한다.
@@ -139,6 +160,9 @@ class AgentState(TypedDict, total=False):
     evidence_finalized: bool
 
     retry_targets: list[str]
+    # 재검색을 기술 단위로 좁히기 위한 범위: 노드 이름 -> 부족한 기술명 목록.
+    # evidence_check가 채우고 graph.py가 (노드, 기술)별 Send로 씀. 비어 있으면 전체 기술.
+    retry_scopes: dict[str, list[str]]
     retry_count: int
     rewrite_count: int
 
