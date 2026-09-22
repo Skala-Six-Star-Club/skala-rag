@@ -12,6 +12,13 @@ SW(TurboQuant)와 HW(ITME) 두 KV cache 최적화 기술을, 기술 성숙도·�
 대응함. `src/graph.py`는 병렬 관점 실행, 최대 1회 재검색, Evidence ID 최종화,
 종합·검수·보고서 흐름을 연결함.
 
+> **검색 설정 채택안 (2026-09-22 비교실험, `scripts/{rag 3종}/*_report.md`)**
+> 절 인식 청킹(800자/overlap 120) + `Qwen/Qwen3-Embedding-0.6B` + Query Rewriting 끔.
+> 설계서 6.1절의 bge-m3와 7.2~7.4절의 리라이팅은 실측(Hit Rate@5, MRR)에서 각각
+> Qwen3-Embedding에 뒤지고 원본 질의와 같거나 낮아 교체·비활성화함. 리라이팅은
+> `.env`의 `QUERY_REWRITING=1`로 다시 켤 수 있음. RAG 3종은 이 설정으로 구현이 끝나
+> 있으며 `python -m scripts.run_rag_agents`로 그래프 없이 실제 순서대로 돌려 볼 수 있음.
+
 ---
 
 ## 디렉토리 구조
@@ -91,7 +98,8 @@ RAG 여부에 따라 `test_runner.py`가 검증하는 방식이 다르고, **"�
 | `src/common/state.py` | `AgentState`(TypedDict) + `TechSpec`/`TechProfile`/`Evidence`/`Reference`/`ViewResult`/`Synthesis`/`JudgeFeedback`. 11장 표의 필드명·타입·갱신 방식(덮어쓰기/누적)을 그대로 구현함 |
 | `src/common/evidence.py` | 병렬 수집용 provisional key 발급, 재시도 후 결정적 정렬·ID 부여, Claim/TechProfile/Reference remap |
 | `src/common/models.py` | `get_generation_llm()`(GPT-5 mini), `get_judge_llm()`(Qwen3-8B, Ollama), `get_embedding_model()`(bge-m3). 3.1절 비교실험용 `get_embedding_model_by_name()` 포함 |
-| `src/common/tools.py` | PDF 로딩(PyMuPDF) → 절 구조 인식(정규식) → 절 경계 내 청킹 → FAISS 색인(`build_doc_pool_index`), 비교용 naive 청킹(`build_doc_pool_index_naive`), `paper_search`, `web_search`(Tavily), `summarize_sources` |
+| `src/common/tools.py` | PDF 로딩(PyMuPDF) → 절 구조 인식(정규식) → 절 경계 내 청킹 → FAISS 색인(`build_doc_pool_index`), 공유 색인 로더(`get_shared_index`, `DOC_POOL_INDEX_DIR/<임베딩>/`), `paper_search`(role/camp/tech 사전 필터, 전체 벡터 대상), `web_search`(Tavily, 키 없으면 DuckDuckGo), `summarize_sources`, 관점 결과 구조화 추출(`extract_view_result`) |
+| `scripts/run_rag_agents.py` | RAG 3종 스모크 실행(select_tech → tech_research → trl_eval, domain_eval → evidence_finalize). `--retry`로 재검색 패스까지 확인. 결과는 `output/rag_agents_smoke.md` |
 | `src/common/base_agent.py` | `BaseAgent.run(state) -> dict` 하나만 구현하면 되는 노드 인터페이스. 모듈 함수 `rewrite_query()`(Pre-retrieval Query Rewriting, 7.2~7.4 공통)도 여기 있음 |
 | `src/common/doc_pool.py` | Doc Pool 6편의 파일명·기술명·진영·역할·arXiv ID (5장 표) |
 | `src/common/eval_utils.py` | `hit_rate_at_k`/`mrr`/`plot_bar_comparison`(RAG 3종), `score_with_rubric`/`plot_rubric_scores`(8.2 루브릭), `UnitCheck`/`plot_unit_checks`(단위 테스트) — 10개 `test_runner.py`가 공유하는 지표·그래프 유틸 |
@@ -126,6 +134,9 @@ pip install -r requirements.txt
 cp .env.example .env
 # .env에 OPENAI_API_KEY, TAVILY_API_KEY 채우기
 ```
+
+임베딩 장치는 `EMBEDDING_DEVICE=auto`(기본)면 cuda → mps(Apple Silicon) → cpu 순으로
+자동 선택함. fp16 로드는 CUDA에서만 켜지고 MPS/CPU는 fp32로 동작함.
 
 ### Ollama 설치 및 실행 (검수 모델 Qwen3-8B, 6.3절)
 
@@ -165,7 +176,7 @@ arXiv ID 참고, 예: `https://arxiv.org/pdf/2504.19874` → `TurboQuant.pdf`).
 | `DeepSeek-V2.pdf` | DeepSeek-V2 | 2405.04434 |
 | `KIVI.pdf` | KIVI | 2402.02750 |
 | `Dynamic KV Cache Mgmt.pdf` | InfiniGen | 2406.19707 |
-| `PIM:CXL.pdf` | PIM/CXL | 2511.00321 |
+| `PIM-CXL.pdf` | PIM/CXL | 2511.00321 |
 
 파일명은 `src/common/doc_pool.py`의 `DOC_POOL_SPECS`에 고정돼 있음(코드가 그 이름을
 그대로 찾음) — 다른 이름으로 받았다면 이 표대로 리네임하거나 `doc_pool.py`를 맞춰 고칠 것.

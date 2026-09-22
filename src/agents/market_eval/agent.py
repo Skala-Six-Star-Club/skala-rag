@@ -3,9 +3,12 @@
 
 입력: state["tech_profiles"], state["techs"]
 출력: {"market_result": ..., "raw_evidence": [...]}
+(근거는 provisional key로 발급되고 evidence_finalize가 최종 번호를 부여함)
 
 두 기술 모두 같은 질의 템플릿·같은 횟수로 실행해 10장 중립성(대칭 질의) 원칙을
-지킴. 앵커 키워드(TechSpec.search_anchor)만 값이 다름.
+지킴. 앵커 키워드(TechSpec.search_anchor)만 값이 다름. 검색 결과는 9.2절 필수
+항목(시장 규모와 성장성, 상용화와 채택 현황, 생태계 지지)에 맞춰 구조화 출력으로
+ViewResult에 담김.
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ from typing import Any
 
 from src.common.base_agent import BaseAgent
 from src.common.state import AgentState, Evidence, TechViewResult, ViewResult
-from src.common.tools import web_search
+from src.common.tools import extract_view_result, web_search
 
 _QUERY_TEMPLATES = [
     "{tech} {anchor} 시장 규모",
@@ -22,45 +25,65 @@ _QUERY_TEMPLATES = [
     "{tech} {anchor} 프레임워크 지원",
 ]
 
+# 9.2절 평가 기준: 완전성(8.2) 채점 시 빠짐없이 다뤄야 하는 필수 항목
+REQUIRED_ITEMS = [
+    "시장 규모와 성장성",
+    "상용화와 채택 현황",
+    "프레임워크 지원과 표준화 같은 생태계 지지",
+]
+PERSPECTIVE_LABEL = "시장성"
+MAX_RESULTS_PER_QUERY = 3
+
 
 class MarketEvalAgent(BaseAgent):
     name = "market_eval"
     uses_rag = False
 
+    def __init__(self) -> None:
+        # 8.3절 Tool Calling Accuracy 측정용: 실제로 던진 질의 문자열을 남김
+        self.last_queries: dict[str, list[str]] = {}
+
     def run(self, state: AgentState) -> dict[str, Any]:
         techs = state["techs"]
-        is_retry = self.name in (state.get("retry_targets") or [])
         new_evidence: list[Evidence] = []
         ordinal = 0
         by_tech: dict[str, TechViewResult] = {}
+        self.last_queries = {}
 
         for tech in techs:
             passages: list[str] = []
+            key_by_num: dict[int, str] = {}
+            self.last_queries[tech.name] = []
             for template in _QUERY_TEMPLATES:
                 query = template.format(tech=tech.name, anchor=tech.search_anchor)
-                for r in web_search(query, max_results=3):
-                    evidence_key = self.provisional_evidence_key(state, tech.name, ordinal)
-                    new_evidence.append(
-                        Evidence(
-                            key=evidence_key,
-                            tech=tech.name,
-                            perspective="market",
-                            stance="반대" if is_retry else "지지",
-                            source_type="웹",
-                            source=r.url,
-                            quote=r.content[:200],
-                        )
+                self.last_queries[tech.name].append(query)
+                for r in web_search(query, max_results=MAX_RESULTS_PER_QUERY):
+                    ev = self.new_evidence(
+                        state, tech.name, ordinal, perspective="market", source_type="웹",
+                        source=r.url, quote=r.content[:200],
                     )
-                    passages.append(f"[임시근거#{evidence_key}] {r.content[:300]}")
+                    new_evidence.append(ev)
+                    num = len(key_by_num) + 1
+                    key_by_num[num] = ev.key
+                    passages.append(f"[근거#{num}] ({r.title}) {r.content[:300]}")
                     ordinal += 1
 
-            # TODO(담당자, 문관록): passages를 GPT-5 mini structured output(get_generation_llm)
-            # 으로 넘겨 TechViewResult(confirmed_facts/counter_facts/unconfirmed_items)를
-            # 채울 것(7.5절). 지금은 자리표시자만 있음.
-            by_tech[tech.name] = TechViewResult()
+            # 7.2절: 발췌를 구조화 출력으로 넘겨 ViewResult 형태로 종합함
+            view = extract_view_result(
+                passages, tech.name, PERSPECTIVE_LABEL, REQUIRED_ITEMS, key_by_num
+            )
+            by_tech[tech.name] = view
+
+            # counter_facts가 참조한 근거는 stance를 "반대"로 바꿔 evidence_check(7.7)의
+            # 반대 근거 유무 규칙이 실제 값을 보게 함
+            counter_keys = {k for c in view.counter_facts for k in c.evidence_keys}
+            for ev in new_evidence:
+                if ev.key in counter_keys:
+                    ev.stance = "반대"
 
         return {
             "market_result": ViewResult(by_tech=by_tech),
             "raw_evidence": new_evidence,
+            # 독립 실행 스크립트 호환. 통합 Graph는 raw 영역으로만 병합함.
             "evidence": new_evidence,
         }
