@@ -6,8 +6,9 @@ Evidence가 충분한지 확인하는 세 가지 규칙과, 관점 에이전트�
 ``evidence``와 정수 ID도 계속 지원한다.
 
 출력:
-    ``retry_targets``, ``retry_count``, ``perspective_confidence``와
-    그라운딩 검증 후의 관점 결과(검증이 필요한 경우)를 반환한다.
+    ``retry_targets``, ``retry_scopes``(노드별 부족한 기술 목록), ``retry_count``,
+    ``perspective_confidence``와 그라운딩 검증 후의 관점 결과(검증이 필요한 경우)를
+    반환한다. 세 규칙은 기술별로 평가해 부족한 (관점, 기술)만 재검색되게 한다.
 """
 
 from __future__ import annotations
@@ -160,6 +161,8 @@ class EvidenceCheckAgent(BaseAgent):
 
         updates: dict[str, Any] = {}
         retry_targets: list[str] = []
+        # 노드 이름 -> 부족한 기술 목록. graph.py가 (노드, 기술)별 Send 재검색에 씀.
+        retry_scopes: dict[str, list[str]] = {}
         confidence: dict[str, dict[str, float]] = {}
         embed = None  # Claim이 실제로 있을 때만 bge-m3를 지연 로딩한다.
 
@@ -175,17 +178,20 @@ class EvidenceCheckAgent(BaseAgent):
                 tech: counts[tech]["지지"] + counts[tech]["반대"]
                 for tech in techs
             }
-            needs_retry = any(total < _MIN_EVIDENCE for total in totals.values())
-            if any(counts[tech]["반대"] == 0 for tech in techs):
-                needs_retry = True
-
+            # 규칙 1~3을 기술별로 평가해 부족한 기술만 재검색 범위에 넣는다.
+            # (규칙 3 불균형은 근거가 적은 쪽 기술이 대상)
+            short_techs: set[str] = {
+                tech for tech in techs
+                if totals[tech] < _MIN_EVIDENCE or counts[tech]["반대"] == 0
+            }
             nonzero = [total for total in totals.values() if total > 0]
             if (
                 len(totals) == 2
                 and len(nonzero) == 2
                 and max(nonzero) / min(nonzero) > _MAX_RATIO
             ):
-                needs_retry = True
+                short_techs.add(min(techs, key=lambda t: totals[t]))
+            needs_retry = bool(short_techs)
 
             # 규칙 4: 결과에 Claim이 있을 때만 그라운딩을 수행한다. 현재 담당
             # 에이전트의 빈 자리표시자 결과 때문에 불필요하게 임베딩을 로드하지 않는다.
@@ -203,10 +209,12 @@ class EvidenceCheckAgent(BaseAgent):
                     if tech_result is not None and not (
                         tech_result.confirmed_facts or tech_result.counter_facts
                     ):
+                        short_techs.add(tech)
                         needs_retry = True
 
             if needs_retry and budget_left:
                 retry_targets.append(agent_name)
+                retry_scopes[agent_name] = [t for t in techs if t in short_techs]
 
             target_count = max(config.TARGET_EVIDENCE_COUNT, 1)
             confidence[perspective] = {
@@ -215,6 +223,7 @@ class EvidenceCheckAgent(BaseAgent):
             }
 
         updates["retry_targets"] = retry_targets
+        updates["retry_scopes"] = retry_scopes
         updates["retry_count"] = retry_count + (1 if retry_targets else 0)
         updates["perspective_confidence"] = confidence
         return updates

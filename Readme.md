@@ -94,7 +94,8 @@ RAG 여부에 따라 `test_runner.py`가 검증하는 방식이 다르고, **"�
 
 | 파일 | 역할 |
 |---|---|
-| `src/graph.py` | 12장 그래프 조립. `build_graph(nodes)`에 노드 이름→callable dict를 넣으면 `select_tech → tech_research → 관점 4종(병렬) → evidence_check → (부족 관점만 재검색 1회) → synthesize → judge → (위반 시 재작성 1회) → report` 순서로 잇고, `make_agents()`가 실제 에이전트 10개를 만들어 줌. `python -m src.graph`로 통합 실행 |
+| `src/graph.py` | 12장 그래프 조립. `build_graph(nodes)`에 노드 이름→callable dict를 넣으면 `select_tech → tech_research → 관점 4종 × 기술 N(Send로 병렬) → evidence_check → (부족한 관점·기술 조합만 재검색 1회) → evidence_finalize → synthesize → judge → (위반 시 재작성 1회) → report` 순서로 잇고, `make_agents()`가 실제 에이전트 10개를 만들어 줌. `python -m src.graph`로 통합 실행 |
+| `scripts/graph_flow_check.py` | API 키·PDF 없이 stub 노드로 그래프 흐름 검증(fan-out 8회, by_tech 병합, 기술 단위 재검색, key 충돌 없음, 재작성 1회). `python -m scripts.graph_flow_check` |
 | `src/common/state.py` | `AgentState`(TypedDict) + `TechSpec`/`TechProfile`/`Evidence`/`Reference`/`ViewResult`/`Synthesis`/`JudgeFeedback`. 11장 표의 필드명·타입·갱신 방식(덮어쓰기/누적)을 그대로 구현함 |
 | `src/common/evidence.py` | 병렬 수집용 provisional key 발급, 재시도 후 결정적 정렬·ID 부여, Claim/TechProfile/Reference remap |
 | `src/common/models.py` | `get_generation_llm()`(GPT-5 mini), `get_judge_llm()`(Qwen3-8B, Ollama), `get_embedding_model()`(bge-m3). 3.1절 비교실험용 `get_embedding_model_by_name()` 포함 |
@@ -119,7 +120,8 @@ RAG 여부에 따라 `test_runner.py`가 검증하는 방식이 다르고, **"�
 - `Synthesis`에는 관점별 신뢰도, 전체 평균(`overall_confidence`), 가장 낮은 관점(`weakest_perspective`)이 코드로 집계되어 저장됨.
 - `Evidence.perspective`는 설계서 4개 관점(`trl`/`market`/`stakeholder`/`domain`)에 조사 단계인 `tech_research`를 더해 5가지 값을 가짐 — "조사와 관점 에이전트는 공통으로 evidence에도 기록함"(4장)을 반영
 - `ViewResult`는 `by_tech: dict[기술명, TechViewResult]` 형태로 두 기술을 나란히 담음(9.5절 "두 기술을 나란히 서술")
-- `retry_targets`에는 관점 코드(`trl`)가 아니라 실제 노드 이름(`trl_eval`)이 들어감 — `evidence_check`가 채우고, `graph.py`가 그 이름의 노드만 다시 실행하며, 각 관점 노드는 `self.name in state["retry_targets"]`로 재검색 초점을 바꿈(12장 "반복 1")
+- 관점 노드 4개는 `graph.py`가 `Send`로 (관점, 기술) 단위로 호출함. 각 호출은 state에 `tech_scope`(기술명 하나)를 받아 `BaseAgent.scoped_techs`로 그 기술만 처리하고, 같은 관점 필드(`trl_result` 등)에 동시에 쓰는 결과는 `merge_view_results` reducer가 기술 키로 합침. 독립 실행 스크립트처럼 `tech_scope` 없이 부르면 techs 전체를 처리함
+- `retry_targets`에는 관점 코드(`trl`)가 아니라 실제 노드 이름(`trl_eval`)이 들어가고, `retry_scopes`에는 노드별로 부족한 기술 목록이 들어감 — `evidence_check`가 세 규칙을 기술별로 평가해 채우고, `graph.py`가 부족한 (노드, 기술)만 `Send`로 다시 실행하며, 각 관점 노드는 `self.name in state["retry_targets"]`로 재검색 초점을 바꿈(12장 "반복 1")
 - `rewrite_count`는 11장 표에 없지만 `retry_count`의 짝으로 추가함 — `synthesize`가 `judge_feedback`을 받아 다시 쓴 횟수를 기록하고, `graph.py`의 `judge` 뒤 조건 분기가 이 값으로 재작성 예산(1회)을 확인함(12장 "반복 2")
 
 ---

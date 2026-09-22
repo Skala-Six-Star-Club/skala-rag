@@ -44,11 +44,12 @@ class MarketEvalAgent(BaseAgent):
         self.last_queries: dict[str, list[str]] = {}
 
     def run(self, state: AgentState) -> dict[str, Any]:
-        techs = state["techs"]
+        techs = self.scoped_techs(state)  # Send fan-out이면 기술 하나, 아니면 전체
         new_evidence: list[Evidence] = []
         ordinal = 0
         by_tech: dict[str, TechViewResult] = {}
-        self.last_queries = {}
+        if not state.get("tech_scope"):
+            self.last_queries = {}
 
         for tech in techs:
             passages: list[str] = []
