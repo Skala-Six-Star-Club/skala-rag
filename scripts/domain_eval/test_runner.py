@@ -26,6 +26,7 @@ from src.common.base_agent import rewrite_query
 from src.common.doc_pool import DOC_POOL_SPECS
 from src.common.eval_utils import (
     GoldenQuery,
+    best_label,
     hit_rate_at_k,
     load_golden_dataset,
     load_golden_dataset_all,
@@ -41,6 +42,14 @@ HERE = Path(__file__).parent
 TOP_K = config.DEFAULT_TOP_K
 THRESHOLD_HIT_RATE = 0.8  # 8.1절 제안 임계값
 THRESHOLD_MRR = 0.6
+
+# 5장·6.1절이 채택한 기본값. 실측 최고 성능과 다르면 결론에서 재검토 대상으로 표시함.
+ADOPTED_CHUNK = "v1_section_aware"
+ADOPTED_EMBEDDING = "bge-m3"
+ADOPTED_QUERY_REWRITING = "리라이팅 질의"
+# 랭킹 기준 지표. Hit Rate@5는 표본이 작으면 1.000에 자주 붙어 후보를 못 가르므로,
+# 표본이 가장 큰(30개) camp 전체 필터의 MRR을 씀(best_label 참고).
+RANKING_KEY = "MRR (camp 전체)"
 
 
 def _get_or_build_index(embedding_model, naive: bool, index_dir: Path) -> FAISS:
@@ -208,6 +217,27 @@ def build_report(chunk, emb, qr) -> str:
         else f"목표 임계값(Hit Rate@5 ≥ {THRESHOLD_HIT_RATE}, MRR ≥ {THRESHOLD_MRR})에 미달함 — "
         "6.1절 절차대로 임베딩 후보 교체를 검토해야 함."
     )
+
+    best_chunk = best_label(chunk_labels, chunk_scores, RANKING_KEY)
+    best_emb = best_label(emb_labels, emb_scores, RANKING_KEY)
+    best_qr = best_label(qr_labels, qr_scores, RANKING_KEY)
+
+    def _match_note(name: str, best: str, adopted: str) -> str:
+        if best == adopted:
+            return f"- {name}: 채택안({adopted})이 {RANKING_KEY} 기준으로도 최고 성능임."
+        return (
+            f"- {name}: 채택안은 {adopted}이지만, {RANKING_KEY} 기준 실측 최고 성능은 "
+            f"**{best}**임 — 6.1절/5장 절차대로 재검토 대상."
+        )
+
+    combination_notes = "\n".join(
+        [
+            _match_note("청킹", best_chunk, ADOPTED_CHUNK),
+            _match_note("임베딩", best_emb, ADOPTED_EMBEDDING),
+            _match_note("Query Rewriting", best_qr, ADOPTED_QUERY_REWRITING),
+        ]
+    )
+
     return f"""# domain_eval 테스트 리포트
 
 설계 근거: docs/agentic-rag-design.md 7.4절 / docs/schedule.md 3.1~3.3절
@@ -243,9 +273,15 @@ def build_report(chunk, emb, qr) -> str:
 
 {verdict}
 
+**채택안 vs 실측 최고 성능** ({RANKING_KEY} 기준):
+
+{combination_notes}
+
 운영 중인 domain_eval은 여기에 더해 "실험 환경"/"평가" 절 우선 재랭킹을 적용함
 (7.4절 2번 항목). 이 재랭킹은 별도 실험 없이 채택된 장치라, 위 수치와 별개로
 실제 운영 결과에서 순위 개선 여부를 추가로 관찰할 것(schedule.md 3.2절 참고).
+골든셋이 30개(role=target 필터는 10개)뿐이라 차이가 통계적으로 확고한지는
+표본을 늘려 다시 확인해 볼 것.
 """
 
 
