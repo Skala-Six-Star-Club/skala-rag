@@ -856,6 +856,7 @@ bge-m3를 선택함. multilingual-e5-large는 입력이 512 토큰으로 제한�
 | `evidence_finalized` | `bool` | 덮어쓰기 | `evidence_finalize` | `synthesize`, `judge`, `report` |
 | `retry_targets` | `list[str]` | 덮어쓰기 | `evidence_check` | 조건 분기, 관점 노드 |
 | `retry_count` | `int` | 덮어쓰기 | `evidence_check` | 조건 분기 |
+| `perspective_confidence` | `dict[str, dict[str, float]]` | 덮어쓰기 | `evidence_check` | `synthesize`, `report` |
 | `rewrite_count` | `int` | 덮어쓰기 | `synthesize` | 조건 분기 |
 | `synthesis` | `Synthesis` | 덮어쓰기 | `synthesize` | `judge`, `report` |
 | `judge_feedback` | `JudgeFeedback` | 덮어쓰기 | `judge` | 조건 분기, `synthesize`, `report` |
@@ -863,7 +864,7 @@ bge-m3를 선택함. multilingual-e5-large는 입력이 512 토큰으로 제한�
 
 관점 노드 4개는 동시에 실행되므로 결과를 서로 다른 키에 씀. 한 키를 여러 노드가 덮어쓰면 LangGraph가 같은 단계의 동시 갱신을 오류(`INVALID_CONCURRENT_GRAPH_UPDATE`)로 처리하기 때문임(LangChain, 2026). 여러 노드가 함께 쓰는 `raw_evidence`와 `raw_references`만 리스트를 이어 붙이는 Reducer로 선언함. 각 항목은 수집 시점에 정수 번호를 예약하지 않고 `perspective:attempt:tech:ordinal` 형식의 임시 key를 갖는다. `evidence_finalize`가 모든 재시도 완료 후 관점·기술·시도·순번으로 정렬해 1부터 연속된 최종 ID를 부여하고, Claim·TechProfile의 key 참조와 Reference ID를 함께 remap한다. 이 시점 전에는 병렬 노드가 `evidence`를 직접 쓰지 않는다.
 
-`Evidence`는 최종 ID(수집 중에는 비어 있을 수 있음), 임시 key, 기술, 관점, 입장(지지, 반대), 출처 유형(논문, 웹), 출처, 인용문으로 구성됨. 입장 필드는 반대 근거가 수집되었는지 점검하는 기준이 됨. `ViewResult`는 기술별로 확인된 사실, 반대 사실, 미확인 항목을 담고 수집 중에는 `evidence_keys`, 최종화 후에는 `evidence_ids`를 참조함.
+`Evidence`는 최종 ID(수집 중에는 비어 있을 수 있음), 임시 key, 기술, 관점, 입장(지지, 반대), 출처 유형(논문, 웹), 출처, 인용문으로 구성됨. 입장 필드는 반대 근거가 수집되었는지 점검하는 기준이 됨. `ViewResult`는 기술별로 확인된 사실, 반대 사실, 미확인 항목을 담고 수집 중에는 `evidence_keys`, 최종화 후에는 `evidence_ids`를 참조함. `evidence_check`는 Claim의 인용문과 statement를 bge-m3로 그라운딩하고, 남은 근거량을 관점별 신뢰도로 집계함. `Synthesis`는 이를 `overall_confidence`와 `weakest_perspective`로 함께 기록하지만 기술 간 우열 판단에는 사용하지 않음.
 
 ---
 

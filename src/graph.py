@@ -104,11 +104,11 @@ def _normalize_parallel_update(node_name: str, node: NodeFn) -> NodeFn:
 
 
 def route_after_evidence_check(state: AgentState) -> list[str] | str:
-    """evidence_check 뒤: 재검색 대상 관점 노드 목록 또는 synthesize.
+    """evidence_check 뒤: 재검색 대상 관점 노드 목록 또는 evidence_finalize.
 
-    evidence_check(7.7)가 예산을 소진했으면 retry_targets를 비워 보내므로 그대로
-    synthesize로 감. retry_count가 상한을 넘었는데도 targets가 남아 있는 비정상 상황은
-    무한 루프 대신 다음 단계로 진행시킴(12장 "조건 분기").
+    evidence_check(7.7)가 예산을 소진했으면 retry_targets를 비워 보내고 ID 최종화로
+    진행한다. retry_count가 상한을 넘었는데도 targets가 남아 있는 비정상 상황은
+    무한 루프 대신 최종화로 진행시킴(12장 "조건 분기").
     """
     targets = [t for t in (state.get("retry_targets") or []) if t in VIEW_NODES]
     if targets and state.get("retry_count", 0) <= MAX_RETRY:
@@ -266,6 +266,17 @@ def summarize_run(final_state: AgentState) -> dict[str, Any]:
         "rewrite_count": final_state.get("rewrite_count", 0),
         "evidence_total": len(evidence),
         "evidence_by_perspective_tech": per_perspective,
+        "perspective_confidence": final_state.get("perspective_confidence", {}),
+        "overall_confidence": (
+            final_state["synthesis"].overall_confidence
+            if final_state.get("synthesis") is not None
+            else 0.0
+        ),
+        "weakest_perspective": (
+            final_state["synthesis"].weakest_perspective
+            if final_state.get("synthesis") is not None
+            else None
+        ),
         "judge_feedback": (
             final_state["judge_feedback"].model_dump()
             if final_state.get("judge_feedback") is not None

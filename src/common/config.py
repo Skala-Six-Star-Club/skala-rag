@@ -35,3 +35,9 @@ DEFAULT_CHUNK_OVERLAP = 120
 
 # 5장: 검색 기본값
 DEFAULT_TOP_K = 5
+
+# 7.7~7.8: 근거 그라운딩 및 신뢰도 집계 기본값
+TARGET_EVIDENCE_COUNT = int(os.getenv("TARGET_EVIDENCE_COUNT", "3"))
+GROUNDING_MIN_SIMILARITY = float(
+    os.getenv("GROUNDING_MIN_SIMILARITY", "0.55")
+)

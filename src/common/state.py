@@ -97,11 +97,14 @@ class Conflict(BaseModel):
 
 
 class Synthesis(BaseModel):
-    """7.8 synthesize 출력. 일치점, 상충점, SUMMARY."""
+    """7.8 synthesize 출력과 관점별 근거 신뢰도 집계."""
 
     agreements: list[str] = Field(default_factory=list)
     conflicts: list[Conflict] = Field(default_factory=list)
     summary: str = ""
+    perspective_confidence: dict[str, dict[str, float]] = Field(default_factory=dict)
+    overall_confidence: float = 0.0
+    weakest_perspective: str | None = None
 
 
 class JudgeFeedback(BaseModel):
@@ -137,6 +140,7 @@ class AgentState(TypedDict, total=False):
 
     retry_targets: list[str]
     retry_count: int
+    perspective_confidence: dict[str, dict[str, float]]
     rewrite_count: int
 
     synthesis: Synthesis

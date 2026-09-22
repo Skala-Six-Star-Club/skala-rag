@@ -101,6 +101,8 @@ RAG 여부에 따라 `test_runner.py`가 검증하는 방식이 다르고, **"�
 `src/common/state.py`가 11장 표를 그대로 구현함. 핵심만 짚으면:
 
 - 병렬 노드는 `raw_evidence`, `raw_references`를 `Annotated[list[...], operator.add]` reducer로 누적함. `evidence_finalize`가 재시도까지 끝난 뒤 결정적인 순서로 정렬해 `evidence`와 `references`에 연속 ID를 부여함. 보고서와 인용 검증은 확정 영역을 사용함.
+- `evidence_check`는 근거량·균형뿐 아니라 Claim의 provisional key/최종 ID와 인용문 임베딩을 확인하고, `perspective_confidence`를 계산해 `synthesize`에 전달함.
+- `Synthesis`에는 관점별 신뢰도, 전체 평균(`overall_confidence`), 가장 낮은 관점(`weakest_perspective`)이 코드로 집계되어 저장됨.
 - `Evidence.perspective`는 설계서 4개 관점(`trl`/`market`/`stakeholder`/`domain`)에 조사 단계인 `tech_research`를 더해 5가지 값을 가짐 — "조사와 관점 에이전트는 공통으로 evidence에도 기록함"(4장)을 반영
 - `ViewResult`는 `by_tech: dict[기술명, TechViewResult]` 형태로 두 기술을 나란히 담음(9.5절 "두 기술을 나란히 서술")
 - `retry_targets`에는 관점 코드(`trl`)가 아니라 실제 노드 이름(`trl_eval`)이 들어감 — `evidence_check`가 채우고, 각 관점 노드가 `self.name in state["retry_targets"]`로 직접 확인함(12장 "반복 1")
