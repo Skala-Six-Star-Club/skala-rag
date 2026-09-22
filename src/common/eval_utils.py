@@ -249,3 +249,116 @@ def plot_unit_checks(checks: list[UnitCheck], title: str, save_path: Path) -> No
     fig.tight_layout()
     fig.savefig(save_path, dpi=150)
     plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# 9.2·9.3절 필수 항목 커버리지 + 규칙 기반 구조 검사 (market_eval/stakeholder_eval)
+# 8.2 루브릭의 "완전성"과 "근거 연결성"을 항목 단위로 분해해 어디가 미달인지 보여줌.
+# ---------------------------------------------------------------------------
+
+
+class ItemCoverage(BaseModel):
+    item: str
+    covered: bool
+    reason: str = ""
+
+
+class CoverageResult(BaseModel):
+    items: list[ItemCoverage] = Field(default_factory=list)
+
+
+def score_required_items(judge_llm: Any, view_text: str, tech: str, required_items: list[str]) -> CoverageResult:
+    """9장 평가 기준표의 필수 항목이 기술별 ViewResult에 실제로 담겼는지 LLM 채점자가 항목별로 판정함."""
+    prompt = (
+        f"다음은 '{tech}' 기술에 대한 관점 평가 결과임. 아래 필수 항목 각각이 "
+        "결과 안에 실제 근거와 함께 서술돼 있는지 항목별로 판정해줘. 항목명은 그대로 돌려줘.\n\n"
+        "[필수 항목]\n" + "\n".join(f"- {i}" for i in required_items)
+        + f"\n\n[평가 결과]\n{view_text}"
+    )
+    scorer = judge_llm.with_structured_output(CoverageResult)
+    result: CoverageResult = scorer.invoke(prompt)
+    # 항목명이 바뀌어 돌아오면 순서 기준으로 맞춤
+    if len(result.items) == len(required_items):
+        for it, name in zip(result.items, required_items):
+            it.item = name
+    return result
+
+
+@dataclass
+class ViewStructureStats:
+    """ViewResult 하나(기술 하나)에 대한 규칙 기반 수치."""
+
+    n_confirmed: int
+    n_counter: int
+    n_unconfirmed: int
+    n_claims_with_evidence: int
+    n_claims_valid_evidence: int
+    n_evidence: int
+    n_evidence_counter: int
+
+    @property
+    def n_claims(self) -> int:
+        return self.n_confirmed + self.n_counter
+
+    @property
+    def evidence_linkage_ratio(self) -> float:
+        return self.n_claims_valid_evidence / self.n_claims if self.n_claims else 0.0
+
+
+def view_structure_stats(view: Any, evidence: list[Any], tech: str) -> ViewStructureStats:
+    """8.2 근거 연결성·7.7 반대 근거 유무를 코드로 계산함(LLM 채점과 별개의 확정 수치)."""
+    tech_evidence = [e for e in evidence if e.tech == tech]
+    valid_ids = {e.id for e in tech_evidence}
+    claims = list(view.confirmed_facts) + list(view.counter_facts)
+    return ViewStructureStats(
+        n_confirmed=len(view.confirmed_facts),
+        n_counter=len(view.counter_facts),
+        n_unconfirmed=len(view.unconfirmed_items),
+        n_claims_with_evidence=sum(1 for c in claims if c.evidence_ids),
+        n_claims_valid_evidence=sum(
+            1 for c in claims if c.evidence_ids and set(c.evidence_ids) <= valid_ids
+        ),
+        n_evidence=len(tech_evidence),
+        n_evidence_counter=sum(1 for e in tech_evidence if e.stance == "반대"),
+    )
+
+
+def tool_calling_accuracy(
+    queries_by_tech: dict[str, list[str]], techs: list[Any], templates: list[str]
+) -> tuple[float, list[str]]:
+    """8.3절 Tool Calling Accuracy: 실제 던진 질의가 코드에 고정된 템플릿과 일치하는 비율.
+
+    질의는 코드가 생성하므로 정상이면 1.0임. 템플릿 수가 두 기술 간 동일한지
+    (10장 대칭 질의)도 함께 확인해 어긋난 항목 목록을 돌려줌.
+    """
+    issues: list[str] = []
+    total = matched = 0
+    for tech in techs:
+        expected = [t.format(tech=tech.name, anchor=tech.search_anchor) for t in templates]
+        actual = queries_by_tech.get(tech.name, [])
+        for q in actual:
+            total += 1
+            if q in expected:
+                matched += 1
+            else:
+                issues.append(f"템플릿 밖 질의: {q}")
+        if len(actual) != len(expected):
+            issues.append(f"{tech.name}: 질의 수 {len(actual)} != 템플릿 수 {len(expected)}")
+    return (matched / total if total else 0.0), issues
+
+
+def format_view_result(view: Any) -> str:
+    """ViewResult(기술 하나)를 채점자가 읽기 좋은 텍스트로 직렬화함."""
+    lines = ["확인된 사실:"]
+    lines += [f"  - {c.statement} {''.join(f'[근거#{i}]' for i in c.evidence_ids)}" for c in view.confirmed_facts] or ["  (없음)"]
+    lines.append("반대 사실:")
+    lines += [f"  - {c.statement} {''.join(f'[근거#{i}]' for i in c.evidence_ids)}" for c in view.counter_facts] or ["  (없음)"]
+    lines.append("미확인 항목:")
+    lines += [f"  - {u}" for u in view.unconfirmed_items] or ["  (없음)"]
+    return "\n".join(lines)
+
+
+def format_evidence(evidence: list[Any], tech: str) -> str:
+    return "\n".join(
+        f"[근거#{e.id}] ({e.stance}) {e.source} :: {e.quote}" for e in evidence if e.tech == tech
+    ) or "(없음)"

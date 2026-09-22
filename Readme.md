@@ -12,6 +12,13 @@ SW(TurboQuant)와 HW(ITME) 두 KV cache 최적화 기술을, 기술 성숙도·�
 대응함. `src/graph.py`는 병렬 관점 실행, 최대 1회 재검색, Evidence ID 최종화,
 종합·검수·보고서 흐름을 연결함.
 
+> **검색 설정 채택안 (2026-09-22 비교실험, `scripts/{rag 3종}/*_report.md`)**
+> 절 인식 청킹(800자/overlap 120) + `Qwen/Qwen3-Embedding-0.6B` + Query Rewriting 끔.
+> 설계서 6.1절의 bge-m3와 7.2~7.4절의 리라이팅은 실측(Hit Rate@5, MRR)에서 각각
+> Qwen3-Embedding에 뒤지고 원본 질의와 같거나 낮아 교체·비활성화함. 리라이팅은
+> `.env`의 `QUERY_REWRITING=1`로 다시 켤 수 있음. RAG 3종은 이 설정으로 구현이 끝나
+> 있으며 `python -m scripts.run_rag_agents`로 그래프 없이 실제 순서대로 돌려 볼 수 있음.
+
 ---
 
 ## 디렉토리 구조
@@ -23,9 +30,13 @@ skala-rag/
 ├── configs/
 │   └── tech_selection.json  # select_tech가 읽는 기술 선정 결과 (3장, Human 기반)
 ├── docs/                    # 설계서, 테스트 계획 (원본)
+├── assets/
+│   └── fonts/NanumGothic-Regular.ttf  # report PDF 한글 폰트 (OFL, xhtml2pdf는 시스템 폰트로 폴백하지 않음)
 ├── data/
 │   └── doc_pool/            # Doc Pool PDF 6편 (gitignore, 직접 내려받아 채움)
+├── output/                  # report 산출물 report.md / report.pdf / report.json (gitignore)
 ├── src/
+│   ├── graph.py               # 10개 노드를 잇는 LangGraph 그래프 (12장) — 통합 실행 진입점
 │   ├── common/               # 10개 에이전트 + 테스트 스크립트가 공유하는 공통 모듈
 │   │   ├── config.py          # .env 로더
 │   │   ├── state.py           # LangGraph State (11장)
@@ -44,8 +55,8 @@ skala-rag/
 │       ├── domain_eval/agent.py        # 7.4절 — RAG 사용
 │       ├── evidence_check/agent.py     # 7.7절 — RAG 미사용, 규칙 기반
 │       ├── synthesize/agent.py         # 7.8절 — RAG 미사용, 생성만
-│       ├── judge/agent.py              # 7.9절 — RAG 미사용, Qwen3-8B 이진 판정
-│       └── report/agent.py             # 7.10절 — RAG 미사용, 조립 + 인용 안전장치
+│       ├── judge/agent.py              # 7.9절 — RAG 미사용, Qwen3-8B 이진 판정 + judge_passed()
+│       └── report/agent.py             # 7.10절 — RAG 미사용, 챕터 직렬화 + 인용 안전장치 + MD/PDF/JSON
 ├── scripts/                  # 에이전트별 독립 테스트 환경 (총 10개, 서로 영향 없음)
 │   ├── tech_research/
 │   │   ├── pdf/v1/index/      # 절 인식 청킹 버전 FAISS 색인 (gitignore)
@@ -71,7 +82,8 @@ RAG 여부에 따라 `test_runner.py`가 검증하는 방식이 다르고, **"�
 | 에이전트 | RAG | 검증 방식 | 지금 바로 실행 가능? |
 |---|---|---|---|
 | `select_tech`, `evidence_check` | X | 입력→기대 출력 단위 테스트 | **가능** — 규칙 기반이라 TODO 자체가 없음(이미 완성) |
-| `report` 1부(인용 안전장치) | X | 단위 테스트 | **가능** — 순수 함수라 TODO 없음 |
+| `report` 1부(인용 안전장치·챕터 직렬화·REFERENCE 표기·JSON/PDF) | X | 단위 테스트 | **가능** — 순수 함수라 API 키 불필요 |
+| `judge` 1부(`judge_passed`) | X | 단위 테스트 | **가능** — graph.py 조건부 엣지용 순수 함수 |
 | `tech_research`, `trl_eval`, `domain_eval` | O | Hit Rate@5·MRR, 청킹/임베딩/Query Rewriting 비교 (3.1~3.3절) | 색인/청킹 로직은 완성돼 있어 Doc Pool·API 키만 있으면 지금도 가능. TODO(구조화 추출)는 검증 대상 밖 |
 | `judge`, `synthesize`, `report` 2부 | X | 이진 판정 스팟체크 / 8.2 루브릭 | 세 에이전트 모두 구조화 출력 호출까지 이미 구현돼 있어(자리표시자 아님) API 키만 있으면 지금도 실행 가능. 다만 프롬프트가 다듬어지기 전 초안이라 낮은 점수가 정상 — 담당자가 프롬프트를 고쳐 재실행하는 용도임 |
 | `market_eval`, `stakeholder_eval` | X | 8.2절 LLM-as-a-Judge 루브릭(1~5점) | **담당자가 `agent.py`의 `TODO`(구조화 추출)를 채운 뒤** — 지금 돌리면 `by_tech`가 빈 자리표시자라 채점 자체가 무의미함 |
@@ -82,10 +94,12 @@ RAG 여부에 따라 `test_runner.py`가 검증하는 방식이 다르고, **"�
 
 | 파일 | 역할 |
 |---|---|
+| `src/graph.py` | 12장 그래프 조립. `build_graph(nodes)`에 노드 이름→callable dict를 넣으면 `select_tech → tech_research → 관점 4종(병렬) → evidence_check → (부족 관점만 재검색 1회) → synthesize → judge → (위반 시 재작성 1회) → report` 순서로 잇고, `make_agents()`가 실제 에이전트 10개를 만들어 줌. `python -m src.graph`로 통합 실행 |
 | `src/common/state.py` | `AgentState`(TypedDict) + `TechSpec`/`TechProfile`/`Evidence`/`Reference`/`ViewResult`/`Synthesis`/`JudgeFeedback`. 11장 표의 필드명·타입·갱신 방식(덮어쓰기/누적)을 그대로 구현함 |
 | `src/common/evidence.py` | 병렬 수집용 provisional key 발급, 재시도 후 결정적 정렬·ID 부여, Claim/TechProfile/Reference remap |
 | `src/common/models.py` | `get_generation_llm()`(GPT-5 mini), `get_judge_llm()`(Qwen3-8B, Ollama), `get_embedding_model()`(bge-m3). 3.1절 비교실험용 `get_embedding_model_by_name()` 포함 |
-| `src/common/tools.py` | PDF 로딩(PyMuPDF) → 절 구조 인식(정규식) → 절 경계 내 청킹 → FAISS 색인(`build_doc_pool_index`), 비교용 naive 청킹(`build_doc_pool_index_naive`), `paper_search`, `web_search`(Tavily), `summarize_sources` |
+| `src/common/tools.py` | PDF 로딩(PyMuPDF) → 절 구조 인식(정규식) → 절 경계 내 청킹 → FAISS 색인(`build_doc_pool_index`), 공유 색인 로더(`get_shared_index`, `DOC_POOL_INDEX_DIR/<임베딩>/`), `paper_search`(role/camp/tech 사전 필터, 전체 벡터 대상), `web_search`(Tavily, 키 없으면 DuckDuckGo), `summarize_sources`, 관점 결과 구조화 추출(`extract_view_result`) |
+| `scripts/run_rag_agents.py` | RAG 3종 스모크 실행(select_tech → tech_research → trl_eval, domain_eval → evidence_finalize). `--retry`로 재검색 패스까지 확인. 결과는 `output/rag_agents_smoke.md` |
 | `src/common/base_agent.py` | `BaseAgent.run(state) -> dict` 하나만 구현하면 되는 노드 인터페이스. 모듈 함수 `rewrite_query()`(Pre-retrieval Query Rewriting, 7.2~7.4 공통)도 여기 있음 |
 | `src/common/doc_pool.py` | Doc Pool 6편의 파일명·기술명·진영·역할·arXiv ID (5장 표) |
 | `src/common/eval_utils.py` | `hit_rate_at_k`/`mrr`/`plot_bar_comparison`(RAG 3종), `score_with_rubric`/`plot_rubric_scores`(8.2 루브릭), `UnitCheck`/`plot_unit_checks`(단위 테스트) — 10개 `test_runner.py`가 공유하는 지표·그래프 유틸 |
@@ -105,7 +119,8 @@ RAG 여부에 따라 `test_runner.py`가 검증하는 방식이 다르고, **"�
 - `Synthesis`에는 관점별 신뢰도, 전체 평균(`overall_confidence`), 가장 낮은 관점(`weakest_perspective`)이 코드로 집계되어 저장됨.
 - `Evidence.perspective`는 설계서 4개 관점(`trl`/`market`/`stakeholder`/`domain`)에 조사 단계인 `tech_research`를 더해 5가지 값을 가짐 — "조사와 관점 에이전트는 공통으로 evidence에도 기록함"(4장)을 반영
 - `ViewResult`는 `by_tech: dict[기술명, TechViewResult]` 형태로 두 기술을 나란히 담음(9.5절 "두 기술을 나란히 서술")
-- `retry_targets`에는 관점 코드(`trl`)가 아니라 실제 노드 이름(`trl_eval`)이 들어감 — `evidence_check`가 채우고, 각 관점 노드가 `self.name in state["retry_targets"]`로 직접 확인함(12장 "반복 1")
+- `retry_targets`에는 관점 코드(`trl`)가 아니라 실제 노드 이름(`trl_eval`)이 들어감 — `evidence_check`가 채우고, `graph.py`가 그 이름의 노드만 다시 실행하며, 각 관점 노드는 `self.name in state["retry_targets"]`로 재검색 초점을 바꿈(12장 "반복 1")
+- `rewrite_count`는 11장 표에 없지만 `retry_count`의 짝으로 추가함 — `synthesize`가 `judge_feedback`을 받아 다시 쓴 횟수를 기록하고, `graph.py`의 `judge` 뒤 조건 분기가 이 값으로 재작성 예산(1회)을 확인함(12장 "반복 2")
 
 ---
 
@@ -119,6 +134,9 @@ pip install -r requirements.txt
 cp .env.example .env
 # .env에 OPENAI_API_KEY, TAVILY_API_KEY 채우기
 ```
+
+임베딩 장치는 `EMBEDDING_DEVICE=auto`(기본)면 cuda → mps(Apple Silicon) → cpu 순으로
+자동 선택함. fp16 로드는 CUDA에서만 켜지고 MPS/CPU는 fp32로 동작함.
 
 ### Ollama 설치 및 실행 (검수 모델 Qwen3-8B, 6.3절)
 
@@ -158,7 +176,7 @@ arXiv ID 참고, 예: `https://arxiv.org/pdf/2504.19874` → `TurboQuant.pdf`).
 | `DeepSeek-V2.pdf` | DeepSeek-V2 | 2405.04434 |
 | `KIVI.pdf` | KIVI | 2402.02750 |
 | `Dynamic KV Cache Mgmt.pdf` | InfiniGen | 2406.19707 |
-| `PIM:CXL.pdf` | PIM/CXL | 2511.00321 |
+| `PIM-CXL.pdf` | PIM/CXL | 2511.00321 |
 
 파일명은 `src/common/doc_pool.py`의 `DOC_POOL_SPECS`에 고정돼 있음(코드가 그 이름을
 그대로 찾음) — 다른 이름으로 받았다면 이 표대로 리네임하거나 `doc_pool.py`를 맞춰 고칠 것.
@@ -185,9 +203,9 @@ python -m scripts.evidence_check.test_runner
 단계라 점수가 낮게 나올 수 있음. 그건 실패가 아니라 "고쳐서 재실행"의 시작점):
 
 ```bash
-python -m scripts.report.test_runner       # 1부는 항상 통과, 2부는 OpenAI+Ollama 필요
+python -m scripts.report.test_runner       # 1부(직렬화·REFERENCE·JSON·PDF)는 키 없이 실행, 2부는 OpenAI+Ollama 필요
 python -m scripts.synthesize.test_runner   # OpenAI+Ollama 필요
-python -m scripts.judge.test_runner        # Ollama 필요
+python -m scripts.judge.test_runner        # 1부(judge_passed)는 키 없이 실행, 2부 스팟체크는 Ollama 필요
 python -m scripts.tech_research.test_runner   # OpenAI API 키 + Doc Pool PDF + golden_dataset.json 필요
 python -m scripts.trl_eval.test_runner
 python -m scripts.domain_eval.test_runner
@@ -214,6 +232,22 @@ RAG 3종의 `test_runner.py`는:
 
 모든 `test_runner.py`는 자신의 `scripts/{agent}/` 아래에만 쓰기 때문에 10개를 동시에
 실행해도 서로 영향 없음.
+
+### 통합 실행
+
+```bash
+python -m src.graph
+```
+
+`src/graph.py`가 Doc Pool 색인을 `data/doc_pool_index/`에 한 번 만들어 RAG 3종이
+공유하게 하고(`.env`의 `DOC_POOL_INDEX_DIR`로 변경 가능, gitignore), 10개 노드를 12장
+순서로 실행한 뒤 `output/report.md`를 쓰고 8.3절 Loop Efficiency 원자료(`retry_count`,
+`rewrite_count`, 관점·기술별 지지/반대 근거 수, `judge_feedback`)를 JSON으로 출력함.
+OpenAI·Tavily 키, Ollama(qwen3:8b), Doc Pool PDF 6편이 모두 필요함.
+
+그래프 흐름만 확인하고 싶으면 `build_graph(nodes)`에 실제 에이전트 대신 같은 계약
+(`state -> dict`)의 stub을 넣으면 됨 — API 키·PDF 없이 병렬 분기, 부분 재검색, 재작성
+루프가 12장대로 도는지 검증할 수 있음.
 
 ### 다음 단계
 

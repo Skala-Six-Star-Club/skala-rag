@@ -108,7 +108,8 @@ class SynthesizeAgent(BaseAgent):
         )
 
         feedback = state.get("judge_feedback")
-        if feedback is not None:
+        is_rewrite = feedback is not None
+        if is_rewrite:
             prompt += f"\n[이전 검수에서 지적된 사항, 반드시 반영할 것]\n{feedback}"
 
         # 동적 confidence dictionary는 코드에서 조립하고, LLM에는 고정 스키마인
@@ -124,6 +125,7 @@ class SynthesizeAgent(BaseAgent):
             weakest_perspective=weakest_perspective,
         )
 
+        # 12장 "반복 2" 예산(1회)을 그래프 조건 분기가 확인할 수 있게 재작성 횟수를 기록함
         rewrite_count = state.get("rewrite_count", 0)
         if feedback is not None and rewrite_count < 1:
             rewrite_count += 1

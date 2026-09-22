@@ -191,24 +191,17 @@ def build_graph(nodes: dict[str, NodeFn]) -> CompiledStateGraph:
 
 
 def load_or_build_doc_pool_index(index_dir: Path = config.DOC_POOL_INDEX_DIR) -> FAISS:
-    """통합 실행용 Doc Pool 색인. 최초 1회 빌드 후 디스크에 저장해 재사용함.
+    """Doc Pool 공유 색인을 `index_dir/<임베딩 이름>/`에서 로드하거나 없으면 구축함.
 
     scripts/{agent}/pdf/v1/index 는 청킹·임베딩 비교실험용이라 건드리지 않고,
-    그래프 실행용 색인은 별도 경로(config.DOC_POOL_INDEX_DIR)에 둠. 5장·6.1절이
-    채택한 기본값(절 인식 청킹, bge-m3)으로만 만듦.
+    그래프 실행용 색인은 별도 경로에 둠. 임베딩 이름별 하위 폴더를 쓰는 이유는
+    채택 임베딩을 바꿨을 때(bge-m3 -> Qwen3-Embedding, 둘 다 1024차원) 이전 모델로
+    만든 색인이 차원 검사에 걸리지 않고 조용히 로드되는 사고를 막기 위함.
+    실제 로직은 tools.get_shared_index와 같음(RAG 3종 독립 실행과 색인을 공유).
     """
-    from src.common.models import get_embedding_model
-    from src.common.tools import build_doc_pool_index
+    from src.common.tools import _embedding_dir_name, get_shared_index
 
-    embedding_model = get_embedding_model()
-    if (index_dir / "index.faiss").exists():
-        return FAISS.load_local(
-            str(index_dir), embedding_model, allow_dangerous_deserialization=True
-        )
-    index = build_doc_pool_index(config.DOC_POOL_DIR, DOC_POOL_SPECS, embedding_model)
-    index_dir.mkdir(parents=True, exist_ok=True)
-    index.save_local(str(index_dir))
-    return index
+    return get_shared_index(index_dir=index_dir / _embedding_dir_name(config.EMBEDDING_MODEL))
 
 
 def make_agents(index: FAISS | None = None) -> dict[str, NodeFn]:
