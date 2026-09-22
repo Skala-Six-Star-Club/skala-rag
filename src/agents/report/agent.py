@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from src.agents.judge.agent import judge_passed
+from src.common import config
 from src.common.base_agent import BaseAgent
 from src.common.models import get_generation_llm
 from src.common.state import (
@@ -176,6 +177,66 @@ def order_references_by_citation(
 
     ordered = sorted(references, key=_rank)
     return [r.model_copy(update={"id": i}) for i, r in enumerate(ordered, 1)]
+
+
+_CITATION_RUN_RE = re.compile(r"(?:\s*\[근거#\d+\])+")
+_PAGE_RE = re.compile(r"\bp\.(\d+)")
+
+
+def render_citations(
+    text: str,
+    evidence: list[Evidence],
+    references: list[Reference],
+    style: str = config.REPORT_CITATION_STYLE,
+) -> str:
+    """출력 직전에 [근거#N] 토큰을 보고서 표기로 바꿈(7.10, 13장).
+
+    numeric: 근거 -> 참고문헌(reference_url 또는 source가 Reference.url/title과 일치)으로
+             묶어 [1], [1, 3]처럼 REFERENCE 번호를 씀. 논문 근거는 쪽을 붙임: [1, p.3].
+             같은 자료의 쪽이 여러 개면 [1, p.3, 16]. 참고문헌을 못 찾은 근거는 뺌.
+    none:    토큰을 제거함(앞 공백 포함). 근거 추적은 report.json의 cited_evidence_ids로.
+    raw:     그대로 둠.
+    """
+    if style == "raw":
+        return text
+    # judge 비고 등에 문자 그대로 들어오는 "[근거#N] 표기" 문구는 보고서 용어로 바꿈
+    text = text.replace("[근거#N] 표기", "근거 표기")
+    if style == "none":
+        return _CITATION_RUN_RE.sub("", text)
+
+    by_id = {e.id: e for e in evidence if e.id is not None}
+    ref_by_key: dict[str, int] = {}
+    for r in references:
+        for k in (r.url, r.title):
+            if k:
+                ref_by_key.setdefault(k, r.id)
+
+    def _replace(m: re.Match) -> str:
+        pages: dict[int, list[str]] = {}
+        for n in re.findall(r"\d+", m.group(0)):
+            e = by_id.get(int(n))
+            if e is None:
+                continue
+            rid = next(
+                (ref_by_key[k] for k in (getattr(e, "reference_url", None), e.source) if k and k in ref_by_key),
+                None,
+            )
+            if rid is None:
+                continue
+            pages.setdefault(rid, [])
+            if e.source_type == "논문":
+                pm = _PAGE_RE.search(e.source)
+                if pm and pm.group(1) not in pages[rid]:
+                    pages[rid].append(pm.group(1))
+        if not pages:
+            return ""
+        parts = []
+        for rid in sorted(pages):
+            page_list = sorted(pages[rid], key=int)
+            parts.append(f"{rid}, p.{', '.join(page_list)}" if page_list else str(rid))
+        return " [" + "; ".join(parts) + "]"
+
+    return _CITATION_RUN_RE.sub(_replace, text)
 
 
 def filter_references(references: list[Reference], cited_evidence_sources: set[str]) -> list[Reference]:
@@ -518,6 +579,12 @@ class ReportAgent(BaseAgent):
         }
         references = filter_references(state.get("references", []), cited_sources)
         references = order_references_by_citation(references, cited_order, state.get("evidence", []))
+
+        # 검증·집계가 끝난 뒤에만 [근거#N]을 보고서 표기([1, p.3] 등)로 바꿈
+        evidence_all = state.get("evidence", [])
+        polished_sections = {
+            t: render_citations(text, evidence_all, references) for t, text in polished_sections.items()
+        }
 
         title = f"# KV cache 최적화 기술 다관점 평가 보고서: {' vs '.join(_tech_names(techs)) or '(기술 미지정)'}"
         body = "\n\n".join(f"## {t}\n\n{text}" for t, text in polished_sections.items())
