@@ -32,7 +32,9 @@ def _detect_device() -> str:
         return "cpu"
 
 
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
+# 6.1절 채택 임베딩. 2026-09-22 비교실험(3.1절)에서 MRR 기준 최상위였던
+# Qwen3-Embedding-0.6B로 교체함(bge-m3 대비 camp 전체 MRR 0.844 -> 0.892).
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
 EMBEDDING_DEVICE = _detect_device()
 # GPU에서는 배치를 키워 임베딩 처리량을 올림(CPU 기본값 32는 그대로 둠).
 EMBEDDING_BATCH_SIZE = int(

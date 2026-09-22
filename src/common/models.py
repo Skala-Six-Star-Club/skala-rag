@@ -2,7 +2,7 @@
 
 - 생성 LLM: OpenAI GPT-5 mini (6.2절)
 - 검수 LLM: Qwen3-8B, Ollama 로컬 (6.3절)
-- 임베딩: bge-m3, 로컬 (6.1절)
+- 임베딩: Qwen3-Embedding-0.6B, 로컬 (6.1절, 3.1절 비교실험으로 교체)
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ def _build_embedding(model_name: str) -> HuggingFaceEmbeddings:
 
 @lru_cache(maxsize=1)
 def get_embedding_model() -> HuggingFaceEmbeddings:
-    """bge-m3 임베딩. 벡터는 정규화 후 내적 유사도로 사용함(6.1절).
+    """채택 임베딩(config.EMBEDDING_MODEL, 기본 Qwen3-Embedding-0.6B). 벡터는 정규화 후 내적 유사도로 사용함(6.1절).
 
     EMBEDDING_DEVICE=auto(기본)면 CUDA 가용 시 GPU에 fp16으로 올림.
     """
