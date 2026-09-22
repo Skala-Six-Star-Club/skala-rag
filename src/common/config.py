@@ -93,3 +93,10 @@ GROUNDING_MIN_SIMILARITY = float(os.getenv("GROUNDING_MIN_SIMILARITY", "0.35"))
 # 관점당 목표 근거 수 5~8건의 하한을 신뢰도 만점 기준으로 사용한다.
 # 재검색 규칙의 최소 3건과는 별도의 값이다.
 TARGET_EVIDENCE_COUNT = int(os.getenv("TARGET_EVIDENCE_COUNT", "5"))
+
+# 7.10 report 본문의 인용 표기 방식. 내부 검증(인용 안전장치, REFERENCE 집계)은 항상
+# [근거#N] 토큰으로 하고, 출력 직전에만 바꿈.
+#   numeric: REFERENCE 번호로 표기 — [3], 여러 자료면 [1, 3], 논문은 쪽 번호 포함 [1, p.3]
+#   none:    본문에서 인용 표기를 모두 제거(REFERENCE 절과 report.json의 근거 번호는 유지)
+#   raw:     [근거#N] 토큰을 그대로 둠(디버깅용)
+REPORT_CITATION_STYLE = os.getenv("REPORT_CITATION_STYLE", "numeric").strip().lower()
