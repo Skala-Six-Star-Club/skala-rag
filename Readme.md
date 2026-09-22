@@ -5,6 +5,39 @@ SW(TurboQuant)와 HW(ITME) 두 KV cache 최적화 기술을, 기술 성숙도·�
 설계 근거는 [docs/agentic-rag-design.md](docs/agentic-rag-design.md), 테스트 계획은
 [docs/schedule.md](docs/schedule.md) 참고.
 
+## 목차
+
+1. [개요](#1-개요)
+2. [선정 기술 및 모델 근거](#2-선정-기술-및-모델-근거)
+   - 2.1 [대상 기술](#21-대상-기술)
+   - 2.2 [RAG 설정 비교실험](#22-rag-설정-비교실험-청킹--임베딩--query-rewriting)
+   - 2.3 [생성·검수 LLM 선정](#23-생성검수-llm-선정)
+3. [아키텍처](#3-아키텍처)
+   - 3.1 [Graph 흐름](#31-graph-흐름)
+   - 3.2 [디렉토리 구조](#32-디렉토리-구조)
+   - 3.3 [State 설계 요약](#33-state-설계-요약)
+   - 3.4 [파일별 역할](#34-파일별-역할)
+4. [에이전트별 테스트 검증](#4-에이전트별-테스트-검증)
+   - 4.1 [RAG 3종](#41-rag-3종-tech_research--trl_eval--domain_eval)
+   - 4.2 [규칙 기반 에이전트](#42-규칙-기반-에이전트-select_tech--evidence_check)
+   - 4.3 [생성 평가 에이전트](#43-생성-평가-에이전트-market_eval--stakeholder_eval--synthesize)
+   - 4.4 [검수·보고서 에이전트](#44-검수보고서-에이전트-judge--report)
+5. [개발 환경 설정](#5-개발-환경-설정)
+   - 5.1 [기본 설치](#51-기본-설치)
+   - 5.2 [Ollama 설치](#52-ollama-설치-및-실행-검수-모델-qwen3-8b-63절)
+   - 5.3 [Doc Pool 준비](#53-doc-pool-준비-rag-3종에만-필요)
+   - 5.4 [Golden Dataset 생성](#54-golden-dataset-생성-최초-1회-팀-공용-rag-3종에만-필요)
+6. [실행 방법](#6-실행-방법)
+   - 6.1 [에이전트별 개별 테스트](#61-에이전트별-개별-테스트-팀원이-각자-독립적으로)
+   - 6.2 [통합 실행](#62-통합-실행)
+7. [다음 단계](#7-다음-단계)
+8. [알려진 한계와 설계 결정 근거](#8-알려진-한계와-설계-결정-근거)
+9. [Contributors](#9-contributors)
+
+---
+
+## 1. 개요
+
 이 저장소는 **설계서의 10개 비즈니스 에이전트와 통합 Graph**를 갖추고 있음. RAG를
 실제로 쓰는 3개(`tech_research`, `trl_eval`, `domain_eval`, 4·5장)와 RAG를 쓰지
 않는 7개(`select_tech`, `market_eval`, `stakeholder_eval`, `evidence_check`,
@@ -12,16 +45,135 @@ SW(TurboQuant)와 HW(ITME) 두 KV cache 최적화 기술을, 기술 성숙도·�
 대응함. `src/graph.py`는 병렬 관점 실행, 최대 1회 재검색, Evidence ID 최종화,
 종합·검수·보고서 흐름을 연결함.
 
-> **검색 설정 채택안 (2026-09-22 비교실험, `scripts/{rag 3종}/*_report.md`)**
+> **검색 설정 채택안** (근거는 2장, 실측 데이터는 `scripts/{rag 3종}/*_report.md`)
 > 절 인식 청킹(800자/overlap 120) + `Qwen/Qwen3-Embedding-0.6B` + Query Rewriting 끔.
-> 설계서 6.1절의 bge-m3와 7.2~7.4절의 리라이팅은 실측(Hit Rate@5, MRR)에서 각각
-> Qwen3-Embedding에 뒤지고 원본 질의와 같거나 낮아 교체·비활성화함. 리라이팅은
-> `.env`의 `QUERY_REWRITING=1`로 다시 켤 수 있음. RAG 3종은 이 설정으로 구현이 끝나
-> 있으며 `python -m scripts.run_rag_agents`로 그래프 없이 실제 순서대로 돌려 볼 수 있음.
+> `.env`의 `QUERY_REWRITING=1`로 리라이팅을 다시 켤 수 있음. RAG 3종은 이 설정으로
+> 구현이 끝나 있으며 `python -m scripts.run_rag_agents`로 그래프 없이 실제 순서대로
+> 돌려 볼 수 있음.
 
 ---
 
-## 디렉토리 구조
+## 2. 선정 기술 및 모델 근거
+
+### 2.1 대상 기술
+
+`configs/tech_selection.json`에서 읽어오는 값(3장, Human 기반 선정):
+
+| 기술 | 진영 | 역할 | 검색 앵커 | 선정 사유 |
+|---|---|---|---|---|
+| **TurboQuant** | SW | target | Google | 보정 데이터 없이 토큰이 들어오는 즉시 양자화 가능. 채널당 3.5비트에서 품질 저하 없음을 보고 |
+| **ITME** | HW | target | SK hynix | CXL-Hybrid 메모리로 TB 규모 원격 메모리 제공. prefix cache의 예측 가능한 접근 패턴을 활용해 GPU로 사전 이동 |
+
+평가 도메인: **"에이전트형 AI 코딩 서비스의 멀티턴 장문맥 서빙"**(2장) — 코딩 에이전트는
+세션당 턴 수 중앙값 43, 입력 길이 중앙값 142K 토큰(vLLM Team, 2026)으로 KV cache를
+세션 내내 보관해야 해 캐시 크기·보관 비용이 서비스 원가에 직결됨.
+
+선정 이유(3장 요약): ① SW/HW 두 진영의 발상을 가장 선명하게 대표(데이터를 줄이는
+TurboQuant vs 담을 곳을 넓히는 ITME), ② 기술 성숙도 단계가 뚜렷이 다름(소프트웨어만으로
+적용 가능 vs 새 인프라 필요), ③ 4개 관점 모두에서 확인할 공개 자료가 존재.
+
+### 2.2 RAG 설정 비교실험 (청킹 / 임베딩 / Query Rewriting)
+
+RAG를 쓰는 3개 에이전트(`tech_research`/`trl_eval`/`domain_eval`)가 각자 독립
+`scripts/{agent}/test_runner.py`로 같은 3가지를 비교실험함(schedule.md 3.1~3.3절).
+청킹·임베딩은 3개 에이전트가 공유하는 전역 색인 설정이라 전체 30개 골든셋으로,
+Query Rewriting은 에이전트가 실제로 던지는 질의 유형이 달라 에이전트별 관점 질의로
+채점함(자세한 수치표는 각 `scripts/{agent}/{agent}_report.md` 참고).
+
+#### tech_research
+
+| 항목 | 결과 |
+|---|---|
+| 청킹(MRR, camp 전체) | 절 인식 0.892 vs naive 0.967 |
+| 임베딩(MRR, camp 전체) | bge-m3 0.844 / multilingual-e5-large 0.867 / **Qwen3-Embedding-0.6B 0.892** |
+| Query Rewriting(MRR, camp 전체) | 원본 1.000 vs 리라이팅 0.964 |
+
+![tech_research 청킹 비교](scripts/tech_research/report_assets/chunking_comparison.png)
+![tech_research 임베딩 비교](scripts/tech_research/report_assets/embedding_comparison.png)
+![tech_research Query Rewriting 비교](scripts/tech_research/report_assets/query_rewriting_comparison.png)
+
+#### trl_eval
+
+| 항목 | 결과 |
+|---|---|
+| 청킹(MRR, camp 전체) | 절 인식 0.892 vs naive 0.967 |
+| 임베딩(MRR, camp 전체) | bge-m3 0.844 / multilingual-e5-large 0.867 / **Qwen3-Embedding-0.6B 0.892** |
+| Query Rewriting(MRR, camp 전체) | 원본 0.750 vs **리라이팅 0.833** |
+
+![trl_eval 청킹 비교](scripts/trl_eval/report_assets/chunking_comparison.png)
+![trl_eval 임베딩 비교](scripts/trl_eval/report_assets/embedding_comparison.png)
+![trl_eval Query Rewriting 비교](scripts/trl_eval/report_assets/query_rewriting_comparison.png)
+
+#### domain_eval
+
+| 항목 | 결과 |
+|---|---|
+| 청킹(MRR, camp 전체) | 절 인식 0.892 vs naive 0.967 |
+| 임베딩(MRR, camp 전체) | bge-m3 0.844 / multilingual-e5-large 0.867 / **Qwen3-Embedding-0.6B 0.892** |
+| Query Rewriting(MRR, camp 전체) | 원본 0.857 vs 리라이팅 0.786 |
+
+![domain_eval 청킹 비교](scripts/domain_eval/report_assets/chunking_comparison.png)
+![domain_eval 임베딩 비교](scripts/domain_eval/report_assets/embedding_comparison.png)
+![domain_eval Query Rewriting 비교](scripts/domain_eval/report_assets/query_rewriting_comparison.png)
+
+#### 최종 채택 및 근거
+
+| 항목 | 설계서 초안(6.1·7.2~7.4절) | 실측 결과 | 채택 |
+|---|---|---|---|
+| 임베딩 | bge-m3 | 3개 에이전트 전부 Qwen3-Embedding-0.6B가 MRR 최고 | **Qwen3-Embedding-0.6B로 교체** |
+| 청킹 | 절 인식(aware) | 3개 에이전트 전부 naive가 MRR 더 높음 | **절 인식(aware) 유지** |
+| Query Rewriting | 적용 | tech_research·domain_eval은 원본이 같거나 높고, trl_eval만 리라이팅이 근소하게 높음(3개 중 2개 일치) | **끔**(`.env`에서 재활성화 가능) |
+
+- **임베딩**은 세 에이전트 결과가 일치해 바로 교체함.
+- **청킹**은 naive가 수치상 더 높지만 절 인식을 그대로 유지함. Doc Pool이 지금은
+  6편·136쪽뿐이라 절 경계가 크게 안 다치지만, 문서가 더 쌓이면 절 인식 없이 슬라이싱한
+  청크는 문맥이 끊겨 손해가 커질 것으로 판단함. 정답 판정 자체가 쪽 번호 기반이라
+  naive가 유리하게 측정됐을 가능성도 있음(`src/common/tools.py` 주석 참고).
+- **Query Rewriting**은 다수결(3개 중 2개)로 껐음 — 완전히 일치한 결론은 아니라서,
+  `trl_eval`은 여전히 리라이팅이 근소하게 나은 채로 남아 있음.
+
+### 2.3 생성·검수 LLM 선정
+
+| 역할 | 모델 | 선정 이유(6.2·6.3절) |
+|---|---|---|
+| 생성(Generator) | GPT-5 mini (OpenAI API) | Structured Outputs strict 모드로 스키마 준수 보장, 관점 4개 병렬 호출에 지연 낮음, 16K 이상 문맥과 안정적 한국어 |
+| 검수(Judge) | Qwen3-8B (Ollama 로컬) | 생성 모델과 다른 계열이어야 자기 선호 편향을 구조적으로 피함(Zheng et al., 2023). 4비트 양자화로 16GB 메모리 예산 안에 들어옴 |
+
+두 모델이 실제로 정확도 있는 판정을 하는지는 4장의 루브릭·스팟체크 결과로 검증함.
+
+---
+
+## 3. 아키텍처
+
+### 3.1 Graph 흐름
+
+`src/graph.py`가 실제로 연결하는 순서(12장). 관점 노드 4개는 `Send`로 (관점,
+기술) 단위 병렬 실행되고(아래는 관점 단위로 단순화해 표시), 재검색·재작성은
+각각 최대 1회임.
+
+```mermaid
+flowchart TD
+    A[select_tech] --> B[tech_research]
+    B --> C1[trl_eval]
+    B --> C2[market_eval]
+    B --> C3[stakeholder_eval]
+    B --> C4[domain_eval]
+    C1 --> D{evidence_check}
+    C2 --> D
+    C3 --> D
+    C4 --> D
+    D -- "근거 부족 (노드·기술 단위, 최대 1회)" --> C1
+    D -- "근거 부족" --> C2
+    D -- "근거 부족" --> C3
+    D -- "근거 부족" --> C4
+    D -- "충족 또는 재시도 소진" --> E[evidence_finalize]
+    E --> F[synthesize]
+    F --> G{judge}
+    G -- "위반 발견 (최대 1회)" --> F
+    G -- "통과 또는 재작성 소진" --> H[report]
+```
+
+### 3.2 디렉토리 구조
 
 ```
 skala-rag/
@@ -72,25 +224,20 @@ skala-rag/
     └── golden/golden_dataset.json  # 생성 결과 (팀 공용, git 추적함)
 ```
 
-## 에이전트별 테스트 방식 (schedule.md 2절)
+### 3.3 State 설계 요약
 
-RAG 여부에 따라 `test_runner.py`가 검증하는 방식이 다르고, **"지금 바로 실행"과
-"담당자가 TODO를 채운 뒤 실행"이 나뉨** — schedule.md 1절의 "만든다 → 돌린다 →
-채점한다 → 기준 미달이면 프롬프트를 고쳐 재실행한다" 피드백 루프가 각 에이전트
-개발 단계에서 도는 것이지, 지금 전부 일괄 실행하라는 뜻이 아님.
+`src/common/state.py`가 11장 표를 그대로 구현함. 핵심만 짚으면:
 
-| 에이전트 | RAG | 검증 방식 | 지금 바로 실행 가능? |
-|---|---|---|---|
-| `select_tech`, `evidence_check` | X | 입력→기대 출력 단위 테스트 | **가능** — 규칙 기반이라 TODO 자체가 없음(이미 완성) |
-| `report` 1부(인용 안전장치·챕터 직렬화·REFERENCE 표기·JSON/PDF) | X | 단위 테스트 | **가능** — 순수 함수라 API 키 불필요 |
-| `judge` 1부(`judge_passed`) | X | 단위 테스트 | **가능** — graph.py 조건부 엣지용 순수 함수 |
-| `tech_research`, `trl_eval`, `domain_eval` | O | Hit Rate@5·MRR, 청킹/임베딩/Query Rewriting 비교 (3.1~3.3절) | 색인/청킹 로직은 완성돼 있어 Doc Pool·API 키만 있으면 지금도 가능. TODO(구조화 추출)는 검증 대상 밖 |
-| `judge`, `synthesize`, `report` 2부 | X | 이진 판정 스팟체크 / 8.2 루브릭 | 세 에이전트 모두 구조화 출력 호출까지 이미 구현돼 있어(자리표시자 아님) API 키만 있으면 지금도 실행 가능. 다만 프롬프트가 다듬어지기 전 초안이라 낮은 점수가 정상 — 담당자가 프롬프트를 고쳐 재실행하는 용도임 |
-| `market_eval`, `stakeholder_eval` | X | 8.2절 LLM-as-a-Judge 루브릭(1~5점) | **담당자가 `agent.py`의 `TODO`(구조화 추출)를 채운 뒤** — 지금 돌리면 `by_tech`가 빈 자리표시자라 채점 자체가 무의미함 |
+- 병렬 노드는 `raw_evidence`, `raw_references`를 `Annotated[list[...], operator.add]` reducer로 누적함. `evidence_finalize`가 재시도까지 끝난 뒤 결정적인 순서로 정렬해 `evidence`와 `references`에 연속 ID를 부여함. 보고서와 인용 검증은 확정 영역을 사용함.
+- `evidence_check`는 근거량·균형뿐 아니라 Claim의 provisional key/최종 ID와 인용문 임베딩을 확인하고, `perspective_confidence`를 계산해 `synthesize`에 전달함.
+- `Synthesis`에는 관점별 신뢰도, 전체 평균(`overall_confidence`), 가장 낮은 관점(`weakest_perspective`)이 코드로 집계되어 저장됨.
+- `Evidence.perspective`는 설계서 4개 관점(`trl`/`market`/`stakeholder`/`domain`)에 조사 단계인 `tech_research`를 더해 5가지 값을 가짐 — "조사와 관점 에이전트는 공통으로 evidence에도 기록함"(4장)을 반영
+- `ViewResult`는 `by_tech: dict[기술명, TechViewResult]` 형태로 두 기술을 나란히 담음(9.5절 "두 기술을 나란히 서술")
+- 관점 노드 4개는 `graph.py`가 `Send`로 (관점, 기술) 단위로 호출함. 각 호출은 state에 `tech_scope`(기술명 하나)를 받아 `BaseAgent.scoped_techs`로 그 기술만 처리하고, 같은 관점 필드(`trl_result` 등)에 동시에 쓰는 결과는 `merge_view_results` reducer가 기술 키로 합침. 독립 실행 스크립트처럼 `tech_scope` 없이 부르면 techs 전체를 처리함
+- `retry_targets`에는 관점 코드(`trl`)가 아니라 실제 노드 이름(`trl_eval`)이 들어가고, `retry_scopes`에는 노드별로 부족한 기술 목록이 들어감 — `evidence_check`가 세 규칙을 기술별로 평가해 채우고, `graph.py`가 부족한 (노드, 기술)만 `Send`로 다시 실행하며, 각 관점 노드는 `self.name in state["retry_targets"]`로 재검색 초점을 바꿈(12장 "반복 1")
+- `rewrite_count`는 11장 표에 없지만 `retry_count`의 짝으로 추가함 — `synthesize`가 `judge_feedback`을 받아 다시 쓴 횟수를 기록하고, `graph.py`의 `judge` 뒤 조건 분기가 이 값으로 재작성 예산(1회)을 확인함(12장 "반복 2")
 
-(실행 명령은 아래 "에이전트별 테스트 실행" 참고)
-
-## 파일별 역할
+### 3.4 파일별 역할
 
 | 파일 | 역할 |
 |---|---|
@@ -104,29 +251,88 @@ RAG 여부에 따라 `test_runner.py`가 검증하는 방식이 다르고, **"�
 | `src/common/base_agent.py` | `BaseAgent.run(state) -> dict` 하나만 구현하면 되는 노드 인터페이스. 모듈 함수 `rewrite_query()`(Pre-retrieval Query Rewriting, 7.2~7.4 공통)도 여기 있음 |
 | `src/common/doc_pool.py` | Doc Pool 6편의 파일명·기술명·진영·역할·arXiv ID (5장 표) |
 | `src/common/eval_utils.py` | `hit_rate_at_k`/`mrr`/`plot_bar_comparison`(RAG 3종), `score_with_rubric`/`plot_rubric_scores`(8.2 루브릭), `UnitCheck`/`plot_unit_checks`(단위 테스트) — 10개 `test_runner.py`가 공유하는 지표·그래프 유틸 |
-| `src/graph.py` | 10개 비즈니스 에이전트와 내부 `evidence_finalize`를 연결하는 통합 Graph |
-| `src/agents/{agent}/agent.py` | 실제 노드 구현. State 입출력 키는 고정돼 있고, `TODO` 표시된 LLM 구조화 추출/프롬프트 로직만 담당자가 채우면 됨(`select_tech`/`evidence_check`는 이미 완성돼 있음 — 규칙 기반이라 판단할 여지가 없음) |
+| `src/agents/{agent}/agent.py` | 실제 노드 구현 10개, 전부 완성됨. LLM 구조화 추출은 `market_eval`/`stakeholder_eval`/`trl_eval`/`domain_eval`이 공용 `extract_view_result`(tools.py)를 쓰고, `select_tech`/`evidence_check`는 규칙 기반이라 LLM을 안 씀 |
 | `configs/tech_selection.json` | `select_tech`가 읽는 기술 선정 결과(3장: TurboQuant/ITME, Human 기반 결정) |
 | `eval/generate_golden_dataset.py` | Doc Pool PDF를 읽어 LLM으로 한국어 검색 질의 약 30개(문서당 5개)를 합성하고 정답 쪽 번호·키워드를 붙여 `golden_dataset.json`에 저장 |
 | `scripts/{rag 3종}/index_config.py` | 그 에이전트의 임베딩 후보 목록(3.1절) |
-| `scripts/{agent}/test_runner.py` | 위 "에이전트별 테스트 방식" 표에 따른 검증을 실행하고, PNG 그래프와 `{agent}_report.md`를 생성 |
-
-## State 설계 요약
-
-`src/common/state.py`가 11장 표를 그대로 구현함. 핵심만 짚으면:
-
-- 병렬 노드는 `raw_evidence`, `raw_references`를 `Annotated[list[...], operator.add]` reducer로 누적함. `evidence_finalize`가 재시도까지 끝난 뒤 결정적인 순서로 정렬해 `evidence`와 `references`에 연속 ID를 부여함. 보고서와 인용 검증은 확정 영역을 사용함.
-- `evidence_check`는 근거량·균형뿐 아니라 Claim의 provisional key/최종 ID와 인용문 임베딩을 확인하고, `perspective_confidence`를 계산해 `synthesize`에 전달함.
-- `Synthesis`에는 관점별 신뢰도, 전체 평균(`overall_confidence`), 가장 낮은 관점(`weakest_perspective`)이 코드로 집계되어 저장됨.
-- `Evidence.perspective`는 설계서 4개 관점(`trl`/`market`/`stakeholder`/`domain`)에 조사 단계인 `tech_research`를 더해 5가지 값을 가짐 — "조사와 관점 에이전트는 공통으로 evidence에도 기록함"(4장)을 반영
-- `ViewResult`는 `by_tech: dict[기술명, TechViewResult]` 형태로 두 기술을 나란히 담음(9.5절 "두 기술을 나란히 서술")
-- 관점 노드 4개는 `graph.py`가 `Send`로 (관점, 기술) 단위로 호출함. 각 호출은 state에 `tech_scope`(기술명 하나)를 받아 `BaseAgent.scoped_techs`로 그 기술만 처리하고, 같은 관점 필드(`trl_result` 등)에 동시에 쓰는 결과는 `merge_view_results` reducer가 기술 키로 합침. 독립 실행 스크립트처럼 `tech_scope` 없이 부르면 techs 전체를 처리함
-- `retry_targets`에는 관점 코드(`trl`)가 아니라 실제 노드 이름(`trl_eval`)이 들어가고, `retry_scopes`에는 노드별로 부족한 기술 목록이 들어감 — `evidence_check`가 세 규칙을 기술별로 평가해 채우고, `graph.py`가 부족한 (노드, 기술)만 `Send`로 다시 실행하며, 각 관점 노드는 `self.name in state["retry_targets"]`로 재검색 초점을 바꿈(12장 "반복 1")
-- `rewrite_count`는 11장 표에 없지만 `retry_count`의 짝으로 추가함 — `synthesize`가 `judge_feedback`을 받아 다시 쓴 횟수를 기록하고, `graph.py`의 `judge` 뒤 조건 분기가 이 값으로 재작성 예산(1회)을 확인함(12장 "반복 2")
+| `scripts/{agent}/test_runner.py` | 4장의 검증을 실행하고, PNG 그래프와 `{agent}_report.md`를 생성 |
 
 ---
 
-## 개발 환경 설정
+## 4. 에이전트별 테스트 검증
+
+에이전트마다 설계 의도(7장 근거)와 실제 검증 결과를 대응시킴. RAG 여부에 따라
+`test_runner.py`가 검증하는 방식이 다름(schedule.md 2절) — 프롬프트를 계속
+다듬는 동안엔 schedule.md 1절의 "만든다 → 돌린다 → 채점한다 → 기준 미달이면
+프롬프트를 고쳐 재실행한다" 루프를 그대로 쓰면 됨.
+
+### 4.1 RAG 3종 (`tech_research` / `trl_eval` / `domain_eval`)
+
+설계 의도: 기술 개요·TRL·도메인 적용 근거는 시장 리포트가 아니라 논문 원문에
+있으므로(5장), Doc Pool 6편을 색인해 `paper_search` + (trl·domain은) `web_search`를
+병행함. `domain_eval`만 동일 유사도일 때 "실험 환경"/"평가" 절을 우선하는 경량
+재랭킹을 추가로 둠(7.4절).
+
+검증 결과(청킹·임베딩·Query Rewriting 비교 그래프)는 2.2절에 이미 전부 제시함 —
+세 에이전트 전부 목표 임계값(Hit Rate@5 ≥ 0.8, MRR ≥ 0.6)을 만족함.
+
+### 4.2 규칙 기반 에이전트 (`select_tech` / `evidence_check`)
+
+설계 의도: `select_tech`는 기술 선정이 이미 사람이 내린 결정이라 LLM 없이 설정
+파일을 그대로 옮기는 순수 로더로 둠 — 환각 위험을 원천 차단함(7.1절).
+`evidence_check`는 그래프의 조건 분기점이라 재현성이 생명이라, 근거 3건 미만·
+반대 근거 0건·비율 2배 초과 3개 규칙 + 그라운딩 검증 규칙을 LLM 판단 없이
+결정론적 코드로 고정함(7.7절).
+
+| 에이전트 | 검증 결과 |
+|---|---|
+| `select_tech` | 단위 테스트 4건 전부 PASS |
+| `evidence_check` | 단위 테스트 10건 전부 PASS(3규칙 + 그라운딩 검증 + confidence 계산) |
+
+![select_tech 단위 테스트](scripts/select_tech/report_assets/unit_checks.png)
+![evidence_check 단위 테스트](scripts/evidence_check/report_assets/unit_checks.png)
+
+### 4.3 생성 평가 에이전트 (`market_eval` / `stakeholder_eval` / `synthesize`)
+
+설계 의도: `market_eval`/`stakeholder_eval`은 시장 규모·이해관계자 반응이 논문이
+아니라 시장 리포트·산업 기사에 있어 RAG 대신 웹 검색만 사용하고, 두 기술에 동일
+질의 템플릿을 같은 횟수로 적용해 중립성을 확보함(7.5·7.6절, 10장). `synthesize`는
+관점 4종의 근거 신뢰도(`perspective_confidence`)를 코드로 결정론적으로 집계해
+LLM에 참고자료로만 제공하되, 기술 간 우열 판단에는 못 쓰게 프롬프트로 통제함(7.8절).
+
+| 에이전트 | 검증 결과 |
+|---|---|
+| `market_eval` | 8.2 루브릭(TurboQuant 4/5/4/4, ITME 5/5/5/5) + 9.2절 필수 항목 커버리지(둘 다 1.00) |
+| `stakeholder_eval` | 8.2 루브릭(TurboQuant·ITME 전부 5/5/5/5) + 9.3절 필수 항목 커버리지(둘 다 1.00) |
+| `synthesize` | 8.2 루브릭 4항목 전부 5점 |
+
+![market_eval 필수 항목 커버리지](scripts/market_eval/report_assets/coverage.png)
+![market_eval 루브릭 점수](scripts/market_eval/report_assets/rubric_scores.png)
+![stakeholder_eval 필수 항목 커버리지](scripts/stakeholder_eval/report_assets/coverage.png)
+![stakeholder_eval 루브릭 점수](scripts/stakeholder_eval/report_assets/rubric_scores.png)
+![synthesize 루브릭 점수](scripts/synthesize/report_assets/rubric_scores.png)
+
+### 4.4 검수·보고서 에이전트 (`judge` / `report`)
+
+설계 의도: `judge`는 생성 모델(GPT)과 다른 계열 모델(Qwen3-8B)을 써서 자기 선호
+편향을 구조적으로 피하고, 판정을 이진값(우열 표현/근거 없는 문장/불균형)으로
+단순화해 8B급 모델에서도 결과가 안정되게 함(7.9절, 6.3절). `report`는 다듬기
+과정에서 존재하지 않는 근거 번호가 섞이지 않도록 인용 안전장치를 두고, 실제로
+인용된 근거만 REFERENCE에 남기도록 필터링함(7.10절).
+
+| 에이전트 | 검증 결과 |
+|---|---|
+| `judge` | 순수함수(`judge_passed`) 4건 + Qwen3-8B 스팟체크 6건 전부 PASS |
+| `report` | 인용 안전장치·챕터 직렬화·REFERENCE 표기·JSON/PDF 단위 테스트 전부 PASS |
+
+![judge 단위 테스트](scripts/judge/report_assets/unit_checks.png)
+![report 인용 안전장치 테스트](scripts/report/report_assets/citation_checks.png)
+
+---
+
+## 5. 개발 환경 설정
+
+### 5.1 기본 설치
 
 ```bash
 python3 -m venv .venv
@@ -140,7 +346,7 @@ cp .env.example .env
 임베딩 장치는 `EMBEDDING_DEVICE=auto`(기본)면 cuda → mps(Apple Silicon) → cpu 순으로
 자동 선택함. fp16 로드는 CUDA에서만 켜지고 MPS/CPU는 fp32로 동작함.
 
-### Ollama 설치 및 실행 (검수 모델 Qwen3-8B, 6.3절)
+### 5.2 Ollama 설치 및 실행 (검수 모델 Qwen3-8B, 6.3절)
 
 `judge`, `synthesize`, `market_eval`, `stakeholder_eval`, `report` 2부를 돌리려면
 로컬에 Ollama가 떠 있어야 함.
@@ -166,7 +372,7 @@ curl http://localhost:11434       # "Ollama is running" 응답 확인
 (기본 `qwen3:8b`)이 위 설정과 일치해야 함. 포트를 바꿨거나 원격 Ollama를 쓰면
 `OLLAMA_BASE_URL`을 그에 맞게 고칠 것.
 
-### Doc Pool 준비 (RAG 3종에만 필요)
+### 5.3 Doc Pool 준비 (RAG 3종에만 필요)
 
 `data/doc_pool/`에 아래 파일명으로 PDF 6편을 받아 둠(`src/common/doc_pool.py`의
 arXiv ID 참고, 예: `https://arxiv.org/pdf/2504.19874` → `TurboQuant.pdf`).
@@ -183,7 +389,7 @@ arXiv ID 참고, 예: `https://arxiv.org/pdf/2504.19874` → `TurboQuant.pdf`).
 파일명은 `src/common/doc_pool.py`의 `DOC_POOL_SPECS`에 고정돼 있음(코드가 그 이름을
 그대로 찾음) — 다른 이름으로 받았다면 이 표대로 리네임하거나 `doc_pool.py`를 맞춰 고칠 것.
 
-### Golden Dataset 생성 (최초 1회, 팀 공용, RAG 3종에만 필요)
+### 5.4 Golden Dataset 생성 (최초 1회, 팀 공용, RAG 3종에만 필요)
 
 ```bash
 python -m eval.generate_golden_dataset
@@ -192,7 +398,11 @@ python -m eval.generate_golden_dataset
 `eval/golden/golden_dataset.json`을 생성해 git에 커밋함. 팀원 전원이 같은 질의셋으로
 비교실험을 해야 결과가 비교 가능하므로, 이미 파일이 있으면 임의로 재생성하지 말 것.
 
-### 에이전트별 테스트 실행 (팀원이 각자, 독립적으로)
+---
+
+## 6. 실행 방법
+
+### 6.1 에이전트별 개별 테스트 (팀원이 각자, 독립적으로)
 
 **규칙 기반, TODO 없이 이미 완성됨 — 지금 바로 실행**:
 
@@ -211,14 +421,8 @@ python -m scripts.judge.test_runner        # 1부(judge_passed)는 키 없이 �
 python -m scripts.tech_research.test_runner   # OpenAI API 키 + Doc Pool PDF + golden_dataset.json 필요
 python -m scripts.trl_eval.test_runner
 python -m scripts.domain_eval.test_runner
-```
-
-**담당자가 `agent.py`의 `TODO`(구조화 추출)를 채운 뒤에 실행** — 지금 돌리면
-`by_tech`가 빈 `TechViewResult()`라 채점 자체가 무의미함:
-
-```bash
-python -m scripts.market_eval.test_runner
-python -m scripts.stakeholder_eval.test_runner
+python -m scripts.market_eval.test_runner       # OpenAI+Tavily+Ollama 필요 (8.2 루브릭 + 9.2절 커버리지 + 8.3 Tool Calling Accuracy)
+python -m scripts.stakeholder_eval.test_runner  # OpenAI+Tavily+Ollama 필요 (8.2 루브릭 + 9.3절 커버리지 + 8.3 Tool Calling Accuracy)
 ```
 
 RAG 3종의 `test_runner.py`는:
@@ -235,7 +439,7 @@ RAG 3종의 `test_runner.py`는:
 모든 `test_runner.py`는 자신의 `scripts/{agent}/` 아래에만 쓰기 때문에 10개를 동시에
 실행해도 서로 영향 없음.
 
-### 통합 실행
+### 6.2 통합 실행
 
 ```bash
 python -m src.graph
@@ -251,8 +455,37 @@ OpenAI·Tavily 키, Ollama(qwen3:8b), Doc Pool PDF 6편이 모두 필요함.
 (`state -> dict`)의 stub을 넣으면 됨 — API 키·PDF 없이 병렬 분기, 부분 재검색, 재작성
 루프가 12장대로 도는지 검증할 수 있음.
 
-### 다음 단계
+---
 
-- 각 `agent.py`의 `TODO` 채우기(담당자, 14장 역할 분담 참고) — LLM 구조화 추출과
-  프롬프트 로직이 대상이며, `select_tech`/`evidence_check`는 규칙 기반이라 이미
-  완성돼 있고 Graph와 Evidence ID 정책도 구현되어 있음
+## 7. 다음 단계
+
+10개 에이전트 구현과 Graph 연결은 끝남. 남은 건 품질 다듬기와 실측:
+
+- 프롬프트 튜닝 계속 — 루브릭·커버리지 점수가 임계값에 걸리면 schedule.md 1절
+  루프(만든다 → 돌린다 → 채점 → 프롬프트 수정 → 재실행)대로 담당자가 개선
+- `python -m src.graph`로 통합 실행을 여러 번 돌려 8.3절 Loop Efficiency(재검색·
+  재작성이 실제로 결과를 개선하는지, 예산 안에서 얼마나 자주 소진되는지) 실측치 축적
+- `market_eval`/`stakeholder_eval`이 evidence_check 규칙(반대 근거 0건 등)에 걸려
+  재검색되는 빈도 관찰 — Tavily 검색 결과 변동성 때문일 수 있어 재현되는지 확인
+
+---
+
+## 8. 알려진 한계와 설계 결정 근거
+
+리뷰에서 나온 지적 3가지를 어디까지 반영했고, 왜 지금 이대로 뒀는지 정리함.
+
+| 지적 | 현재 상태 | 왜 지금 이대로 뒀는지 |
+|---|---|---|
+| Query Rewriting 효과를 실측 데이터로 검증할 필요 | 골든셋 30개로 3개 RAG 에이전트 전부 실측 완료(2.2절) | 3개 중 2개는 원본이 낫고 1개(`trl_eval`)만 리라이팅이 나음. "왜 trl_eval만 다른가"는 표본(에이전트당 9~14개 질의)이 작아 추가 조사보다 우선순위가 낮다고 판단해 보류함 |
+| 재검색 초점 전환 트리거를 세분화할 필요 | evidence_check의 3개 규칙(근거 3건 미만/반대 근거 0건/비율 2배 초과) 중 무엇이 걸렸든 항상 같은 초점("한계·실패 사례")으로 전환(7.3·7.4절) | 트리거별로 다른 초점을 주는 게 나을 수 있으나, 지금 방식이 실제로 비효율적인지부터 8.3절 Loop Efficiency 데이터로 확인이 먼저라고 판단함(7장 "다음 단계" 참고). 데이터 없이 복잡도만 올리지 않기로 함 |
+| evidence_check 임계값(근거 3건, 비율 2배)의 데이터 기반 검증 필요 | 명시적 휴리스틱(schedule.md 4절에 이미 문서화) | 관점당 목표 근거 수를 5~8건으로 잡고 최소 하한을 3건, 지지·반대가 쏠리기 시작하는 지점을 2배로 본 경험적 판단임. 비교실험 비용 대비 효과가 낮다고 보아 처음부터 실험 대상에서 제외했고, 실제 그래프 실행에서 재검색이 비정상적으로 자주/거의 안 걸리는 게 관찰되면 그때 재검토하기로 함 |
+
+## 9. Contributors
+
+| 이름 | 역할 |
+|---|---|
+| 신소영 | RAG 파이프라인 설계(청크 분할, 메타데이터 스키마), 임베딩 모델 선정 / PDF 로딩·분할 파이프라인, FAISS 색인 구축, 검색 평가 스크립트(Hit Rate@5, MRR) 구현 |
+| 최광원 | 생성·검수 LLM 모델 선정, 프롬프트 템플릿 설계 / OpenAI API 연동, Ollama 검수 모델 서빙, 생성·검수 모델 비교 벤치마크, 프롬프트 템플릿 코드화 |
+| 문관록 | 시장 평가 에이전트 설계, 웹 검색 도구 인터페이스 설계 / Tavily 웹 검색 도구 구현, `market_eval` 노드 구현 |
+| 박기연 | 이해관계자·도메인 평가 에이전트 설계, 대칭 질의 템플릿 설계 / `stakeholder_eval`·`domain_eval` 노드 구현, 대칭 질의 템플릿 코드 적용 |
+| 임채현 | State·Graph 아키텍처 설계, 기술 성숙도 에이전트 설계 / State 스키마·LangGraph 그래프 구현, 근거 점검 재시도 로직 구현, `trl_eval` 노드 구현 |
