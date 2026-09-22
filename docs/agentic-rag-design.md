@@ -849,17 +849,21 @@ bge-m3를 선택함. multilingual-e5-large는 입력이 512 토큰으로 제한�
 | `market_result` | `ViewResult` | 덮어쓰기 | `market_eval` | 위와 같음 |
 | `stakeholder_result` | `ViewResult` | 덮어쓰기 | `stakeholder_eval` | 위와 같음 |
 | `domain_result` | `ViewResult` | 덮어쓰기 | `domain_eval` | 위와 같음 |
-| `evidence` | `Annotated[list[Evidence], operator.add]` | 누적 | 조사, 관점 노드 | `evidence_check`, `judge`, `report` |
-| `references` | `Annotated[list[Reference], operator.add]` | 누적 | 조사, 관점 노드 | `report` |
+| `raw_evidence` | `Annotated[list[Evidence], operator.add]` | 누적 | 조사, 관점 노드 | `evidence_check`, `evidence_finalize` |
+| `raw_references` | `Annotated[list[Reference], operator.add]` | 누적 | 조사, 관점 노드 | `evidence_finalize` |
+| `evidence` | `list[Evidence]` | 덮어쓰기 | `evidence_finalize` | `judge`, `report` |
+| `references` | `list[Reference]` | 덮어쓰기 | `evidence_finalize` | `report` |
+| `evidence_finalized` | `bool` | 덮어쓰기 | `evidence_finalize` | `synthesize`, `judge`, `report` |
 | `retry_targets` | `list[str]` | 덮어쓰기 | `evidence_check` | 조건 분기, 관점 노드 |
 | `retry_count` | `int` | 덮어쓰기 | `evidence_check` | 조건 분기 |
+| `rewrite_count` | `int` | 덮어쓰기 | `synthesize` | 조건 분기 |
 | `synthesis` | `Synthesis` | 덮어쓰기 | `synthesize` | `judge`, `report` |
 | `judge_feedback` | `JudgeFeedback` | 덮어쓰기 | `judge` | 조건 분기, `synthesize`, `report` |
 | `report_md`, `report_path` | `str` | 덮어쓰기 | `report` | 없음 |
 
-관점 노드 4개는 동시에 실행되므로 결과를 서로 다른 키에 씀. 한 키를 여러 노드가 덮어쓰면 LangGraph가 같은 단계의 동시 갱신을 오류(`INVALID_CONCURRENT_GRAPH_UPDATE`)로 처리하기 때문임(LangChain, 2026). 여러 노드가 함께 쓰는 `evidence`와 `references`만 리스트를 이어 붙이는 Reducer로 선언함.
+관점 노드 4개는 동시에 실행되므로 결과를 서로 다른 키에 씀. 한 키를 여러 노드가 덮어쓰면 LangGraph가 같은 단계의 동시 갱신을 오류(`INVALID_CONCURRENT_GRAPH_UPDATE`)로 처리하기 때문임(LangChain, 2026). 여러 노드가 함께 쓰는 `raw_evidence`와 `raw_references`만 리스트를 이어 붙이는 Reducer로 선언함. 각 항목은 수집 시점에 정수 번호를 예약하지 않고 `perspective:attempt:tech:ordinal` 형식의 임시 key를 갖는다. `evidence_finalize`가 모든 재시도 완료 후 관점·기술·시도·순번으로 정렬해 1부터 연속된 최종 ID를 부여하고, Claim·TechProfile의 key 참조와 Reference ID를 함께 remap한다. 이 시점 전에는 병렬 노드가 `evidence`를 직접 쓰지 않는다.
 
-`Evidence`는 번호, 기술, 관점, 입장(지지, 반대), 출처 유형(논문, 웹), 출처, 인용문으로 구성됨. 입장 필드는 반대 근거가 수집되었는지 점검하는 기준이 됨. `ViewResult`는 기술별로 확인된 사실, 반대 사실, 미확인 항목을 담고 각 문장이 `Evidence` 번호를 참조함.
+`Evidence`는 최종 ID(수집 중에는 비어 있을 수 있음), 임시 key, 기술, 관점, 입장(지지, 반대), 출처 유형(논문, 웹), 출처, 인용문으로 구성됨. 입장 필드는 반대 근거가 수집되었는지 점검하는 기준이 됨. `ViewResult`는 기술별로 확인된 사실, 반대 사실, 미확인 항목을 담고 수집 중에는 `evidence_keys`, 최종화 후에는 `evidence_ids`를 참조함.
 
 ---
 
@@ -881,10 +885,11 @@ flowchart TD
     G -- "근거 부족, 재시도 0회" --> D
     G -- "근거 부족, 재시도 0회" --> E
     G -- "근거 부족, 재시도 0회" --> F
-    G -- "충족 또는 재시도 소진" --> H["synthesize"]
-    H --> I{"judge"}
-    I -- "위반 발견, 재작성 0회" --> H
-    I -- "통과 또는 재작성 소진" --> J["report"]
+    G -- "충족 또는 재시도 소진" --> H["evidence_finalize"]
+    H --> I["synthesize"]
+    I --> J{"judge"}
+    J -- "위반 발견, 재작성 0회" --> I
+    J -- "통과 또는 재작성 소진" --> K["report"]
 ```
 
 흐름은 정보 수집, 분석, 평가, 보고서의 순서를 따름. 기술 조사가 먼저 끝나야 네 관점이 같은 사실 위에서 출발할 수 있어 앞부분은 순차로 둠. 네 관점은 서로의 결과를 볼 필요가 없고, 보지 않는 편이 한 관점의 결론이 다른 관점에 번지는 것을 막으므로 병렬로 실행함.
@@ -895,6 +900,7 @@ flowchart TD
 | 합류 | `evidence_check` | 네 결과가 모두 도착한 뒤 실행 |
 | 반복 1 | `evidence_check`에서 관점 노드로 | 관점별 근거가 기술당 3건 미만이거나, 반대 근거가 없거나, 두 기술의 근거 수가 2배 넘게 차이 나면 해당 관점만 질의를 바꿔 다시 검색. 1회 한정 |
 | 반복 2 | `judge`에서 `synthesize`로 | 우열 판정 표현이나 출처 없는 문장이 있으면 지적 사항과 함께 재작성. 1회 한정 |
+| Evidence ID 확정 | `evidence_finalize` | 재시도를 소진한 뒤 provisional key를 결정적으로 정렬하고 Evidence/Claim/Reference의 최종 ID를 확정 |
 | 조건 분기 | 두 판단 노드 | 재시도를 소진하면 부족한 항목을 미확인으로 기록하고 다음 단계로 진행 |
 
 반복 횟수를 1회로 묶은 것은 실행 시간과 API 비용을 예측 가능한 범위에 두기 위함임. 관점 하나당 구조화 출력을 요구하는 판단 호출은 2회 이내로 제한함. Pre-retrieval Query Rewriting(7.2~7.4)처럼 구조화 출력이 아닌 짧은 텍스트 생성 호출은 이 예산과 별도로 관리함.

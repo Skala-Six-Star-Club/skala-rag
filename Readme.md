@@ -5,13 +5,12 @@ SW(TurboQuant)와 HW(ITME) 두 KV cache 최적화 기술을, 기술 성숙도·�
 설계 근거는 [docs/agentic-rag-design.md](docs/agentic-rag-design.md), 테스트 계획은
 [docs/schedule.md](docs/schedule.md) 참고.
 
-이 저장소의 현재 단계는 **설계서의 10개 에이전트 전부를 팀원이 병렬로 완성할 수
-있는 공통 구조**를 갖추는 것임. RAG를 실제로 쓰는 3개(`tech_research`, `trl_eval`,
-`domain_eval`, 4·5장)와 RAG를 쓰지 않는 7개(`select_tech`, `market_eval`,
-`stakeholder_eval`, `evidence_check`, `synthesize`, `judge`, `report`)가 각각
-`src/agents/{agent}/`, `scripts/{agent}/`에 대응함. 전체를 하나로 잇는
-`graph.py`(12장)는 아직 없음 — 그건 각자의 내부 로직(`TODO`)이 채워진 뒤의 다음
-단계임.
+이 저장소는 **설계서의 10개 비즈니스 에이전트와 통합 Graph**를 갖추고 있음. RAG를
+실제로 쓰는 3개(`tech_research`, `trl_eval`, `domain_eval`, 4·5장)와 RAG를 쓰지
+않는 7개(`select_tech`, `market_eval`, `stakeholder_eval`, `evidence_check`,
+`synthesize`, `judge`, `report`)가 각각 `src/agents/{agent}/`, `scripts/{agent}/`에
+대응함. `src/graph.py`는 병렬 관점 실행, 최대 1회 재검색, Evidence ID 최종화,
+종합·검수·보고서 흐름을 연결함.
 
 ---
 
@@ -30,6 +29,7 @@ skala-rag/
 │   ├── common/               # 10개 에이전트 + 테스트 스크립트가 공유하는 공통 모듈
 │   │   ├── config.py          # .env 로더
 │   │   ├── state.py           # LangGraph State (11장)
+│   │   ├── evidence.py        # 임시 Evidence key 발급·최종 ID 확정
 │   │   ├── models.py          # 생성/검수 LLM, 임베딩 로더 (6장)
 │   │   ├── tools.py           # paper_search, web_search, summarize_sources, PDF 로딩/청킹
 │   │   ├── base_agent.py      # 에이전트 노드 공통 인터페이스
@@ -83,11 +83,13 @@ RAG 여부에 따라 `test_runner.py`가 검증하는 방식이 다르고, **"�
 | 파일 | 역할 |
 |---|---|
 | `src/common/state.py` | `AgentState`(TypedDict) + `TechSpec`/`TechProfile`/`Evidence`/`Reference`/`ViewResult`/`Synthesis`/`JudgeFeedback`. 11장 표의 필드명·타입·갱신 방식(덮어쓰기/누적)을 그대로 구현함 |
+| `src/common/evidence.py` | 병렬 수집용 provisional key 발급, 재시도 후 결정적 정렬·ID 부여, Claim/TechProfile/Reference remap |
 | `src/common/models.py` | `get_generation_llm()`(GPT-5 mini), `get_judge_llm()`(Qwen3-8B, Ollama), `get_embedding_model()`(bge-m3). 3.1절 비교실험용 `get_embedding_model_by_name()` 포함 |
 | `src/common/tools.py` | PDF 로딩(PyMuPDF) → 절 구조 인식(정규식) → 절 경계 내 청킹 → FAISS 색인(`build_doc_pool_index`), 비교용 naive 청킹(`build_doc_pool_index_naive`), `paper_search`, `web_search`(Tavily), `summarize_sources` |
 | `src/common/base_agent.py` | `BaseAgent.run(state) -> dict` 하나만 구현하면 되는 노드 인터페이스. 모듈 함수 `rewrite_query()`(Pre-retrieval Query Rewriting, 7.2~7.4 공통)도 여기 있음 |
 | `src/common/doc_pool.py` | Doc Pool 6편의 파일명·기술명·진영·역할·arXiv ID (5장 표) |
 | `src/common/eval_utils.py` | `hit_rate_at_k`/`mrr`/`plot_bar_comparison`(RAG 3종), `score_with_rubric`/`plot_rubric_scores`(8.2 루브릭), `UnitCheck`/`plot_unit_checks`(단위 테스트) — 10개 `test_runner.py`가 공유하는 지표·그래프 유틸 |
+| `src/graph.py` | 10개 비즈니스 에이전트와 내부 `evidence_finalize`를 연결하는 통합 Graph |
 | `src/agents/{agent}/agent.py` | 실제 노드 구현. State 입출력 키는 고정돼 있고, `TODO` 표시된 LLM 구조화 추출/프롬프트 로직만 담당자가 채우면 됨(`select_tech`/`evidence_check`는 이미 완성돼 있음 — 규칙 기반이라 판단할 여지가 없음) |
 | `configs/tech_selection.json` | `select_tech`가 읽는 기술 선정 결과(3장: TurboQuant/ITME, Human 기반 결정) |
 | `eval/generate_golden_dataset.py` | Doc Pool PDF를 읽어 LLM으로 한국어 검색 질의 약 30개(문서당 5개)를 합성하고 정답 쪽 번호·키워드를 붙여 `golden_dataset.json`에 저장 |
@@ -98,7 +100,7 @@ RAG 여부에 따라 `test_runner.py`가 검증하는 방식이 다르고, **"�
 
 `src/common/state.py`가 11장 표를 그대로 구현함. 핵심만 짚으면:
 
-- `evidence`, `references`는 여러 노드가 동시에 쓰므로 `Annotated[list[...], operator.add]` reducer로 누적됨. 나머지 필드는 단일 노드만 쓰므로 덮어쓰기(`INVALID_CONCURRENT_GRAPH_UPDATE` 회피, 12장)
+- 병렬 노드는 `raw_evidence`, `raw_references`를 `Annotated[list[...], operator.add]` reducer로 누적함. `evidence_finalize`가 재시도까지 끝난 뒤 결정적인 순서로 정렬해 `evidence`와 `references`에 연속 ID를 부여함. 보고서와 인용 검증은 확정 영역을 사용함.
 - `Evidence.perspective`는 설계서 4개 관점(`trl`/`market`/`stakeholder`/`domain`)에 조사 단계인 `tech_research`를 더해 5가지 값을 가짐 — "조사와 관점 에이전트는 공통으로 evidence에도 기록함"(4장)을 반영
 - `ViewResult`는 `by_tech: dict[기술명, TechViewResult]` 형태로 두 기술을 나란히 담음(9.5절 "두 기술을 나란히 서술")
 - `retry_targets`에는 관점 코드(`trl`)가 아니라 실제 노드 이름(`trl_eval`)이 들어감 — `evidence_check`가 채우고, 각 관점 노드가 `self.name in state["retry_targets"]`로 직접 확인함(12장 "반복 1")
@@ -211,9 +213,8 @@ RAG 3종의 `test_runner.py`는:
 모든 `test_runner.py`는 자신의 `scripts/{agent}/` 아래에만 쓰기 때문에 10개를 동시에
 실행해도 서로 영향 없음.
 
-### 다음 단계 (이번 범위 밖)
+### 다음 단계
 
-- 각 `agent.py`의 `TODO` 채우기(담당자, 14장 역할 분담 참고) — LLM 구조화 추출/
-  프롬프트 로직이 대상이며, `select_tech`/`evidence_check`는 규칙 기반이라 이미 완성돼 있음
-- 10개 노드를 하나로 잇는 `graph.py` 작성(12장: 병렬 분기, `evidence_check`/`judge`
-  조건부 재시도 라우팅)
+- 각 `agent.py`의 `TODO` 채우기(담당자, 14장 역할 분담 참고) — LLM 구조화 추출과
+  프롬프트 로직이 대상이며, `select_tech`/`evidence_check`는 규칙 기반이라 이미
+  완성돼 있고 Graph와 Evidence ID 정책도 구현되어 있음

@@ -21,6 +21,9 @@ EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
 DOC_POOL_DIR = Path(os.getenv("DOC_POOL_DIR", "./data/doc_pool"))
+DOC_POOL_INDEX_DIR = Path(
+    os.getenv("DOC_POOL_INDEX_DIR", "./data/doc_pool_index")
+)
 GOLDEN_DATASET_PATH = Path(
     os.getenv("GOLDEN_DATASET_PATH", "./eval/golden/golden_dataset.json")
 )

@@ -2,7 +2,7 @@
 도입할 때의 조건과 장벽을 정리함.
 
 입력: state["tech_profiles"], state["domain"]
-출력: {"domain_result": ..., "evidence": [...]}
+출력: {"domain_result": ..., "raw_evidence": [...]}
 
 이 에이전트에 한해, 유사도가 동률일 때 "실험 환경"/"평가" 절 청크를 우선하는
 경량 규칙 기반 재랭킹을 둠(7.4절 2번 항목). 정식 reranker는 두지 않음.
@@ -46,7 +46,7 @@ class DomainEvalAgent(BaseAgent):
         domain = state["domain"]
         is_retry = self.name in (state.get("retry_targets") or [])
         new_evidence: list[Evidence] = []
-        next_id = self.next_evidence_id(state)
+        ordinal = 0
         by_tech: dict[str, TechViewResult] = {}
 
         for tech in techs:
@@ -66,9 +66,10 @@ class DomainEvalAgent(BaseAgent):
             # 넘겨 도메인 적용 조건/장벽을 confirmed_facts/counter_facts/unconfirmed_items
             # 형태로 채움(7.4절).
             for doc in paper_docs:
+                evidence_key = self.provisional_evidence_key(state, tech.name, ordinal)
                 new_evidence.append(
                     Evidence(
-                        id=next_id,
+                        key=evidence_key,
                         tech=tech.name,
                         perspective="domain",
                         stance="반대" if is_retry else "지지",
@@ -77,11 +78,12 @@ class DomainEvalAgent(BaseAgent):
                         quote=doc.page_content[:200],
                     )
                 )
-                next_id += 1
+                ordinal += 1
             for r in web_results:
+                evidence_key = self.provisional_evidence_key(state, tech.name, ordinal)
                 new_evidence.append(
                     Evidence(
-                        id=next_id,
+                        key=evidence_key,
                         tech=tech.name,
                         perspective="domain",
                         stance="반대" if is_retry else "지지",
@@ -90,8 +92,12 @@ class DomainEvalAgent(BaseAgent):
                         quote=r.content[:200],
                     )
                 )
-                next_id += 1
+                ordinal += 1
 
             by_tech[tech.name] = TechViewResult()  # TODO: confirmed/counter/unconfirmed 채움
 
-        return {"domain_result": ViewResult(by_tech=by_tech), "evidence": new_evidence}
+        return {
+            "domain_result": ViewResult(by_tech=by_tech),
+            "raw_evidence": new_evidence,
+            "evidence": new_evidence,
+        }

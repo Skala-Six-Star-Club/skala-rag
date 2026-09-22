@@ -1,6 +1,6 @@
 """근거 점검 에이전트 (7.7절). LLM을 쓰지 않는 규칙 기반 노드.
 
-입력: state의 관점 결과 4종 + evidence
+입력: state의 관점 결과 4종 + raw_evidence
 출력: {"retry_targets": [...], "retry_count": int}
 
 규칙(임계값은 통계적으로 도출한 값이 아니라 경험적 휴리스틱, 7.7절):
@@ -39,7 +39,11 @@ class EvidenceCheckAgent(BaseAgent):
             # 재시도 예산 소진: 더 재검색시키지 않고 미확인으로 넘어가게 신호만 비움
             return {"retry_targets": [], "retry_count": retry_count}
 
-        evidence = state.get("evidence", [])
+        # 그래프 실행에서는 병렬 reducer가 누적한 raw_evidence를 읽는다. 기존
+        # 단위 호출에서 evidence만 넣는 형태도 호환한다.
+        evidence = state.get("raw_evidence")
+        if evidence is None:
+            evidence = state.get("evidence", [])
         techs = [t.name for t in state["techs"]]
         retry_targets: list[str] = []
 

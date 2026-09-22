@@ -1,6 +1,6 @@
 """LangGraph 그래프 조립. docs/agentic-rag-design.md 12장 Graph 설계를 그대로 구현함.
 
-이 파일은 10개 에이전트 **공통**으로 하나만 존재함. 각 `src/agents/{agent}/agent.py`는
+이 파일은 10개 비즈니스 에이전트 **공통**으로 하나만 존재함. 각 `src/agents/{agent}/agent.py`는
 `BaseAgent.run(state) -> dict` 계약만 지키는 노드이고, 그 노드들을 어떤 순서·조건으로
 잇는지는 전부 여기서 정함. 에이전트별 `scripts/{agent}/test_runner.py`는 그래프 없이
 노드 하나만 따로 돌리므로 이 파일과 무관함(schedule.md 2절). 이 파일은 전 에이전트가
@@ -8,7 +8,7 @@
 
     select_tech -> tech_research -> [trl_eval | market_eval | stakeholder_eval | domain_eval]
         -> evidence_check --(근거 부족, 재시도 0회)--> 부족한 관점 노드만 다시 -> evidence_check
-        -> synthesize -> judge --(위반 발견, 재작성 0회)--> synthesize
+        -> evidence_finalize -> synthesize -> judge --(위반 발견, 재작성 0회)--> synthesize
         -> report
 
 구현 시 지킨 12장 규칙:
@@ -21,6 +21,8 @@
 - 반복 1: evidence_check가 채운 `retry_targets`(노드 이름 목록)로 해당 노드만 재실행함.
   각 관점 노드는 `self.name in state["retry_targets"]`로 재검색 초점을 바꿈. 횟수 예산
   (1회)은 evidence_check가 `retry_count`로 관리하고, 그래프는 안전장치로 한 번 더 확인함.
+- Evidence ID 확정: evidence_check가 끝난 뒤 내부 finalizer가 임시 key를 정렬하고
+  연속 정수 ID를 부여한다. 이 노드는 비즈니스 에이전트 수에 포함하지 않는다.
 - 반복 2: judge_feedback에 위반이 있고 재작성 예산(1회)이 남아 있으면 synthesize로 돌아감.
   재작성 횟수는 synthesize가 `rewrite_count`에 기록함.
 - 조건 분기: 예산 소진 시 부족한 항목을 미확인 상태로 둔 채 다음 단계로 진행함.
@@ -49,6 +51,7 @@ from src.common.state import AgentState, JudgeFeedback
 NODE_SELECT_TECH = "select_tech"
 NODE_TECH_RESEARCH = "tech_research"
 NODE_EVIDENCE_CHECK = "evidence_check"
+NODE_EVIDENCE_FINALIZE = "evidence_finalize"
 NODE_SYNTHESIZE = "synthesize"
 NODE_JUDGE = "judge"
 NODE_REPORT = "report"
@@ -58,6 +61,7 @@ ALL_NODES: tuple[str, ...] = (
     NODE_TECH_RESEARCH,
     *VIEW_NODES,
     NODE_EVIDENCE_CHECK,
+    NODE_EVIDENCE_FINALIZE,
     NODE_SYNTHESIZE,
     NODE_JUDGE,
     NODE_REPORT,
@@ -68,6 +72,30 @@ MAX_RETRY = 1
 MAX_REWRITE = 1
 
 NodeFn = Callable[[AgentState], dict[str, Any]]
+
+
+def _normalize_parallel_update(node_name: str, node: NodeFn) -> NodeFn:
+    """구 에이전트의 ``evidence`` 반환을 raw 누적 영역으로 호환 변환한다.
+
+    새 노드는 ``raw_evidence``를 반환하지만, 독립 실행 스크립트나 외부 팀 코드가
+    예전 계약인 ``evidence``를 반환할 수 있다. Graph에서는 최종화 노드만 확정
+    ``evidence``를 쓰므로, 업무 노드의 레거시 반환은 reducer 영역으로 옮긴다.
+    """
+
+    if node_name == NODE_EVIDENCE_FINALIZE:
+        return node
+
+    def normalized(state: AgentState) -> dict[str, Any]:
+        update = dict(node(state))
+        if "evidence" in update:
+            update.setdefault("raw_evidence", update["evidence"])
+            update.pop("evidence", None)
+        if "references" in update:
+            update.setdefault("raw_references", update["references"])
+            update.pop("references", None)
+        return update
+
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +113,7 @@ def route_after_evidence_check(state: AgentState) -> list[str] | str:
     targets = [t for t in (state.get("retry_targets") or []) if t in VIEW_NODES]
     if targets and state.get("retry_count", 0) <= MAX_RETRY:
         return targets
-    return NODE_SYNTHESIZE
+    return NODE_EVIDENCE_FINALIZE
 
 
 def judge_found_violation(feedback: JudgeFeedback | None) -> bool:
@@ -124,7 +152,7 @@ def build_graph(nodes: dict[str, NodeFn]) -> CompiledStateGraph:
 
     graph = StateGraph(AgentState)
     for name in ALL_NODES:
-        graph.add_node(name, nodes[name])
+        graph.add_node(name, _normalize_parallel_update(name, nodes[name]))
 
     # 순차: 기술 조사가 끝나야 네 관점이 같은 사실 위에서 출발함
     graph.add_edge(START, NODE_SELECT_TECH)
@@ -139,8 +167,11 @@ def build_graph(nodes: dict[str, NodeFn]) -> CompiledStateGraph:
     graph.add_conditional_edges(
         NODE_EVIDENCE_CHECK,
         route_after_evidence_check,
-        [*VIEW_NODES, NODE_SYNTHESIZE],
+        [*VIEW_NODES, NODE_EVIDENCE_FINALIZE],
     )
+
+    # 재시도까지 끝난 뒤에만 임시 Evidence key를 최종 정수 ID로 확정한다.
+    graph.add_edge(NODE_EVIDENCE_FINALIZE, NODE_SYNTHESIZE)
 
     # 반복 2: 위반 시 재작성, 아니면 보고서로
     graph.add_edge(NODE_SYNTHESIZE, NODE_JUDGE)
@@ -155,7 +186,7 @@ def build_graph(nodes: dict[str, NodeFn]) -> CompiledStateGraph:
 
 
 # ---------------------------------------------------------------------------
-# 실제 에이전트 10개 조립 (Doc Pool 색인은 RAG 3종이 공유함, 5장)
+# 실제 비즈니스 에이전트 10개 조립 (Doc Pool 색인은 RAG 3종이 공유함, 5장)
 # ---------------------------------------------------------------------------
 
 
@@ -181,7 +212,7 @@ def load_or_build_doc_pool_index(index_dir: Path = config.DOC_POOL_INDEX_DIR) ->
 
 
 def make_agents(index: FAISS | None = None) -> dict[str, NodeFn]:
-    """설계서 4장 표의 에이전트 10개를 인스턴스화해 노드 이름으로 돌려줌."""
+    """설계서 4장 표의 에이전트 10개와 내부 finalizer를 노드로 돌려줌."""
     from src.agents.domain_eval.agent import DomainEvalAgent
     from src.agents.evidence_check.agent import EvidenceCheckAgent
     from src.agents.judge.agent import JudgeAgent
@@ -192,6 +223,7 @@ def make_agents(index: FAISS | None = None) -> dict[str, NodeFn]:
     from src.agents.synthesize.agent import SynthesizeAgent
     from src.agents.tech_research.agent import TechResearchAgent
     from src.agents.trl_eval.agent import TrlEvalAgent
+    from src.common.evidence import finalize_evidence
 
     if index is None:
         index = load_or_build_doc_pool_index()
@@ -208,7 +240,9 @@ def make_agents(index: FAISS | None = None) -> dict[str, NodeFn]:
         JudgeAgent(),
         ReportAgent(),
     ]
-    return {agent.name: agent for agent in agents}
+    nodes: dict[str, NodeFn] = {agent.name: agent for agent in agents}
+    nodes[NODE_EVIDENCE_FINALIZE] = finalize_evidence
+    return nodes
 
 
 def build_default_graph(index: FAISS | None = None) -> CompiledStateGraph:

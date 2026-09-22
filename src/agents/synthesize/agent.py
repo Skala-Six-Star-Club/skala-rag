@@ -52,4 +52,7 @@ class SynthesizeAgent(BaseAgent):
         # 넣지 말고 사람이 읽기 좋은 형태로 직렬화). 구조화 출력 호출 자체는 동작함.
         llm = get_generation_llm().with_structured_output(Synthesis)
         synthesis: Synthesis = llm.invoke(prompt)  # type: ignore[assignment]
-        return {"synthesis": synthesis}
+        rewrite_count = state.get("rewrite_count", 0)
+        if feedback is not None and rewrite_count < 1:
+            rewrite_count += 1
+        return {"synthesis": synthesis, "rewrite_count": rewrite_count}
