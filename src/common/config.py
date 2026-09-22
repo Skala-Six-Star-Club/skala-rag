@@ -7,7 +7,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# override=True: .env 값이 셸에 이미 깔려 있는(예: 다른 프로젝트에서 export한 낡은
+# 키) 동일 이름 환경변수보다 항상 우선하게 함. 기본값(override=False)이면
+# load_dotenv()가 기존 환경변수를 덮어쓰지 않아, .env를 고쳐도 조용히 무시되는
+# 문제가 생길 수 있음.
+load_dotenv(override=True)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
@@ -60,13 +64,15 @@ EMBEDDING_FP16 = os.getenv("EMBEDDING_FP16", "1") == "1" and EMBEDDING_IS_CUDA
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
 DOC_POOL_DIR = Path(os.getenv("DOC_POOL_DIR", "./data/doc_pool"))
+# 그래프·에이전트 공유 색인 루트. 실제 색인은 <루트>/<임베딩 이름>/ 아래에 두어
+# 채택 임베딩을 바꿔도 이전 모델 색인이 섞여 로드되지 않게 함(tools.get_shared_index).
+DOC_POOL_INDEX_DIR = Path(
+    os.getenv("DOC_POOL_INDEX_DIR", "./data/doc_pool_index")
+)
 GOLDEN_DATASET_PATH = Path(
     os.getenv("GOLDEN_DATASET_PATH", "./eval/golden/golden_dataset.json")
 )
 TECH_SELECTION_CONFIG_PATH = Path("./configs/tech_selection.json")
-# 에이전트가 공유하는 Doc Pool FAISS 색인 저장 위치(임베딩 이름별 하위 폴더, gitignore)
-INDEX_DIR = Path(os.getenv("INDEX_DIR", "./data/index"))
-
 # 7.2~7.4 Pre-retrieval Query Rewriting. 2026-09-22 3차 비교실험에서 Qwen3-Embedding
 # 위에서는 리라이팅이 원본 질의보다 같거나 낮아(출력 형식 불안정 포함) 기본값을 끔.
 # 켜려면 QUERY_REWRITING=1. 테스트 러너의 3.3절 비교실험은 이 값과 무관하게 전/후를 모두 잼.
@@ -78,3 +84,12 @@ DEFAULT_CHUNK_OVERLAP = 120
 
 # 5장: 검색 기본값
 DEFAULT_TOP_K = 5
+
+# 7.7절 확장(evidence_check 환각 검증): 주장(Claim)과 인용 근거(Evidence.quote) 간
+# bge-m3 임베딩 코사인 유사도 임계값. 초기값은 경험적 휴리스틱이며(8.1절 Hit Rate@K
+# 임계값과 같은 성격), Golden Dataset(8.4절)으로 실측 후 조정 대상임.
+GROUNDING_MIN_SIMILARITY = float(os.getenv("GROUNDING_MIN_SIMILARITY", "0.35"))
+
+# 관점당 목표 근거 수 5~8건의 하한을 신뢰도 만점 기준으로 사용한다.
+# 재검색 규칙의 최소 3건과는 별도의 값이다.
+TARGET_EVIDENCE_COUNT = int(os.getenv("TARGET_EVIDENCE_COUNT", "5"))

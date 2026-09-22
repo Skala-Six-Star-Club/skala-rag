@@ -13,13 +13,12 @@ venv/
 # Doc Pool source PDFs (copyrighted arXiv papers, fetched locally per README)
 data/doc_pool/*.pdf
 
-# Shared Doc Pool FAISS index used by the agents (rebuildable)
-data/index/
-
 # Embedding DB / FAISS indexes (rebuildable, per-teammate versioned)
 scripts/*/pdf/v*/index*/
 scripts/*/pdf/v*/*.faiss
 scripts/*/pdf/v*/*.pkl
+# 그래프 통합 실행용 공유 색인 (src/graph.py, config.DOC_POOL_INDEX_DIR)
+data/doc_pool_index/
 
 # Test results / generated reports & charts — 팀원과 공유하려고 추적함(gitignore 아님)
 eval/results/

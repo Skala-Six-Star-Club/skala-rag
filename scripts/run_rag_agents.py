@@ -1,8 +1,8 @@
 """RAG 3종 에이전트 스모크 실행 (graph.py 이전 단계).
 
-select_tech -> tech_research -> trl_eval, domain_eval 순으로 실제 노드를 돌려
-State 갱신분을 output/rag_agents_smoke.md에 사람이 읽을 수 있게 남김.
-graph.py가 생기면 이 스크립트는 그래프의 부분 실행으로 대체됨.
+select_tech -> tech_research -> trl_eval, domain_eval -> evidence_finalize 순으로
+실제 노드를 돌려 State 갱신분을 output/rag_agents_smoke.md에 사람이 읽을 수 있게 남김.
+전체 10개 노드 통합 실행은 `python -m src.graph`(src/graph.py)를 쓸 것.
 
 실행: python -m scripts.run_rag_agents [--retry]
   --retry: trl_eval/domain_eval을 retry_targets에 넣어 재검색 패스(초점 전환)까지 확인
@@ -21,15 +21,21 @@ from src.agents.tech_research.agent import TechResearchAgent
 from src.agents.trl_eval.agent import TrlEvalAgent
 from src.common import config
 from src.common.eval_utils import format_view_result
+from src.common.evidence import finalize_evidence
 from src.common.tools import get_shared_index
 
 OUT = Path("output/rag_agents_smoke.md")
 
 
 def _merge(state: dict, update: dict) -> None:
-    """LangGraph reducer 흉내: evidence/references는 누적, 나머지는 덮어씀(11장)."""
+    """graph.py의 _normalize_parallel_update + reducer 흉내: raw_evidence/raw_references는
+    누적, 레거시 evidence/references 키는 raw로 보내고, 나머지는 덮어씀(11장)."""
     for k, v in update.items():
         if k in ("evidence", "references"):
+            k = "raw_" + k
+            if k in update:
+                continue
+        if k in ("raw_evidence", "raw_references"):
             state[k] = state.get(k, []) + v
         else:
             state[k] = v
@@ -37,7 +43,7 @@ def _merge(state: dict, update: dict) -> None:
 
 def main() -> None:
     do_retry = "--retry" in sys.argv
-    state: dict = {"evidence": [], "references": []}
+    state: dict = {"raw_evidence": [], "raw_references": []}
     timings: dict[str, float] = {}
 
     t = time.time(); _merge(state, SelectTechAgent().run(state)); timings["select_tech"] = time.time() - t
@@ -48,6 +54,9 @@ def main() -> None:
         state["retry_targets"] = ["trl_eval", "domain_eval"]
         for agent in (TrlEvalAgent(index), DomainEvalAgent(index)):
             t = time.time(); _merge(state, agent.run(state)); timings[agent.name + " (retry)"] = time.time() - t
+
+    # 재시도까지 끝난 뒤 provisional key -> 최종 번호 확정(graph.py의 evidence_finalize 노드)
+    t = time.time(); state.update(finalize_evidence(state)); timings["evidence_finalize"] = time.time() - t
 
     lines = [
         "# RAG 3종 에이전트 스모크 실행 결과", "",
@@ -63,14 +72,15 @@ def main() -> None:
     for key, title in (("trl_result", "trl_eval"), ("domain_result", "domain_eval")):
         for tech, view in state[key].by_tech.items():
             lines += [f"## {title}: {tech}", "", "```", format_view_result(view), "```", ""]
-    lines += ["## evidence 요약", "", "| 관점 | 기술 | 근거 수 | 반대 근거 수 | 번호 대역 |", "|---|---|---|---|---|"]
+    lines += ["## evidence 요약 (evidence_finalize 이후 최종 번호)", "", "| 관점 | 기술 | 근거 수 | 반대 근거 수 | 번호 범위 |", "|---|---|---|---|---|"]
     for persp in ("tech_research", "trl", "domain"):
         for tech in state["tech_profiles"]:
             evs = [e for e in state["evidence"] if e.perspective == persp and e.tech == tech]
             if evs:
                 lines.append(f"| {persp} | {tech} | {len(evs)} | {sum(e.stance == '반대' for e in evs)} | {min(e.id for e in evs)}~{max(e.id for e in evs)} |")
     ids = [e.id for e in state["evidence"]]
-    lines += ["", f"근거 번호 중복: {len(ids) - len(set(ids))}건", ""]
+    keys = [e.key for e in state["raw_evidence"]]
+    lines += ["", f"최종 번호 중복: {len(ids) - len(set(ids))}건, provisional key 중복: {len(keys) - len(set(keys))}건", ""]
     lines += ["## references", ""] + [f"- {r.title} ({r.year}) {r.url}" for r in state["references"]]
 
     OUT.parent.mkdir(parents=True, exist_ok=True)

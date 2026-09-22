@@ -90,9 +90,18 @@ def _plot_coverage(coverage: dict[str, dict[str, bool]], save_path: Path) -> Non
     plt.close(fig)
 
 
+def _finalized(result: dict) -> dict:
+    """provisional key를 최종 번호로 바꿔(evidence_finalize와 동일 로직) 채점에 씀."""
+    from src.common.evidence import finalize_evidence
+
+    state = {"techs": FIXTURE_STATE["techs"], "raw_evidence": result["raw_evidence"], "market_result": result["market_result"]}
+    return finalize_evidence(state)
+
+
 def evaluate(agent: MarketEvalAgent, result: dict) -> dict:
-    view_result = result["market_result"]
-    evidence = result["evidence"]
+    final = _finalized(result)
+    view_result = final["market_result"]
+    evidence = final["evidence"]
     techs = FIXTURE_STATE["techs"]
     judge = get_judge_llm()
 

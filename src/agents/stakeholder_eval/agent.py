@@ -2,7 +2,8 @@
 업계의 반응을 웹 검색만으로 조사함. RAG 미사용(5장 원칙).
 
 입력: state["tech_profiles"], state["techs"]
-출력: {"stakeholder_result": ..., "evidence": [...]}
+출력: {"stakeholder_result": ..., "raw_evidence": [...]}
+(근거는 provisional key로 발급되고 evidence_finalize가 최종 번호를 부여함)
 
 market_eval과 동일한 검색 앵커 키워드를 재사용해 질의 경로를 코드로 고정함
 (4장 도구 선택 원칙, 10장 대칭 질의). 검색 결과는 9.3절 필수 항목(경쟁 진영의
@@ -45,44 +46,44 @@ class StakeholderEvalAgent(BaseAgent):
     def run(self, state: AgentState) -> dict[str, Any]:
         techs = state["techs"]
         new_evidence: list[Evidence] = []
-        next_id = self.next_evidence_id(state)
+        ordinal = 0
         by_tech: dict[str, TechViewResult] = {}
         self.last_queries = {}
 
         for tech in techs:
             passages: list[str] = []
-            tech_ids: set[int] = set()
+            key_by_num: dict[int, str] = {}
             self.last_queries[tech.name] = []
             for template in _QUERY_TEMPLATES:
                 query = template.format(tech=tech.name, anchor=tech.search_anchor)
                 self.last_queries[tech.name].append(query)
                 for r in web_search(query, max_results=MAX_RESULTS_PER_QUERY):
-                    new_evidence.append(
-                        Evidence(
-                            id=next_id,
-                            tech=tech.name,
-                            perspective="stakeholder",
-                            stance="지지",
-                            source_type="웹",
-                            source=r.url,
-                            quote=r.content[:200],
-                        )
+                    ev = self.new_evidence(
+                        state, tech.name, ordinal, perspective="stakeholder", source_type="웹",
+                        source=r.url, quote=r.content[:200],
                     )
-                    passages.append(f"[근거#{next_id}] ({r.title}) {r.content[:300]}")
-                    tech_ids.add(next_id)
-                    next_id += 1
+                    new_evidence.append(ev)
+                    num = len(key_by_num) + 1
+                    key_by_num[num] = ev.key
+                    passages.append(f"[근거#{num}] ({r.title}) {r.content[:300]}")
+                    ordinal += 1
 
             # 7.3절: 발췌를 구조화 출력으로 넘겨 ViewResult 형태로 종합함
             view = extract_view_result(
-                passages, tech.name, PERSPECTIVE_LABEL, REQUIRED_ITEMS, tech_ids
+                passages, tech.name, PERSPECTIVE_LABEL, REQUIRED_ITEMS, key_by_num
             )
             by_tech[tech.name] = view
 
             # counter_facts가 참조한 근거는 stance를 "반대"로 바꿔 evidence_check(7.7)의
             # 반대 근거 유무 규칙이 실제 값을 보게 함
-            counter_ids = {i for c in view.counter_facts for i in c.evidence_ids}
+            counter_keys = {k for c in view.counter_facts for k in c.evidence_keys}
             for ev in new_evidence:
-                if ev.id in counter_ids:
+                if ev.key in counter_keys:
                     ev.stance = "반대"
 
-        return {"stakeholder_result": ViewResult(by_tech=by_tech), "evidence": new_evidence}
+        return {
+            "stakeholder_result": ViewResult(by_tech=by_tech),
+            "raw_evidence": new_evidence,
+            # 독립 실행 스크립트 호환. 통합 Graph는 raw 영역으로만 병합함.
+            "evidence": new_evidence,
+        }

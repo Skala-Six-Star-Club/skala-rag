@@ -1,7 +1,8 @@
 """기술 성숙도 에이전트 (7.3절). TRL 구간을 추정하고 근거와 정보 공백을 정리함.
 
 입력: state["techs"], state["tech_profiles"]
-출력: {"trl_result": ..., "evidence": [...]}
+출력: {"trl_result": ..., "raw_evidence": [...]}
+(근거는 provisional key로 발급되고 evidence_finalize가 최종 번호를 부여함)
 
 검색 설정(3차 비교실험 채택안): 절 인식 청킹 + Qwen3-Embedding-0.6B + Query
 Rewriting 끔. 논문 Top-5(role=target)와 웹 Top-5를 합쳐 구조화 출력 1회로
@@ -58,7 +59,7 @@ class TrlEvalAgent(BaseAgent):
         is_retry = self.name in (state.get("retry_targets") or [])
         prior = state.get("trl_result")
         new_evidence: list[Evidence] = []
-        next_id = self.next_evidence_id(state)
+        ordinal = 0
         by_tech: dict[str, TechViewResult] = {}
         self.last_queries = {}
 
@@ -73,37 +74,34 @@ class TrlEvalAgent(BaseAgent):
             web_results = web_search(web_query, max_results=WEB_MAX_RESULTS)
 
             passages: list[str] = []
-            tech_ids: set[int] = set()
+            key_by_num: dict[int, str] = {}
+
+            def _add(ev: Evidence, label: str, body: str) -> None:
+                new_evidence.append(ev)
+                num = len(key_by_num) + 1  # 프롬프트용 로컬 번호(기술마다 1부터)
+                key_by_num[num] = ev.key
+                passages.append(f"[근거#{num}] ({label}) {body}")
+
             for doc in paper_docs:
-                new_evidence.append(
-                    Evidence(
-                        id=next_id,
-                        tech=tech.name,
-                        perspective="trl",
-                        stance="지지",
-                        source_type="논문",
-                        source=format_paper_source(tech.name, doc),
-                        quote=doc.page_content[:200],
-                    )
+                _add(
+                    self.new_evidence(
+                        state, tech.name, ordinal, perspective="trl", source_type="논문",
+                        source=format_paper_source(tech.name, doc), quote=doc.page_content[:200],
+                    ),
+                    f"논문 p.{doc.metadata.get('page')} {doc.metadata.get('section', '')}",
+                    doc.page_content,
                 )
-                passages.append(f"[근거#{next_id}] (논문 p.{doc.metadata.get('page')} {doc.metadata.get('section', '')}) {doc.page_content}")
-                tech_ids.add(next_id)
-                next_id += 1
+                ordinal += 1
             for r in web_results:
-                new_evidence.append(
-                    Evidence(
-                        id=next_id,
-                        tech=tech.name,
-                        perspective="trl",
-                        stance="지지",
-                        source_type="웹",
-                        source=r.url,
-                        quote=r.content[:200],
-                    )
+                _add(
+                    self.new_evidence(
+                        state, tech.name, ordinal, perspective="trl", source_type="웹",
+                        source=r.url, quote=r.content[:200],
+                    ),
+                    f"웹: {r.title} {r.published_date or ''}",
+                    r.content[:600],
                 )
-                passages.append(f"[근거#{next_id}] (웹: {r.title} {r.published_date or ''}) {r.content[:600]}")
-                tech_ids.add(next_id)
-                next_id += 1
+                ordinal += 1
 
             # 재검색 시 1차 결과의 미확인 항목만 이어받음(7.3절 Context 및 Memory)
             prior_unconfirmed = (
@@ -116,16 +114,21 @@ class TrlEvalAgent(BaseAgent):
                 tech.name,
                 PERSPECTIVE_LABEL,
                 REQUIRED_ITEMS,
-                tech_ids,
+                key_by_num,
                 extra_instructions=EXTRA_INSTRUCTIONS,
                 prior_unconfirmed=prior_unconfirmed,
             )
             by_tech[tech.name] = view
 
             # counter_facts가 참조한 근거는 stance를 "반대"로 바꿔 evidence_check(7.7)가 실제 값을 보게 함
-            counter_ids = {i for c in view.counter_facts for i in c.evidence_ids}
+            counter_keys = {k for c in view.counter_facts for k in c.evidence_keys}
             for ev in new_evidence:
-                if ev.id in counter_ids:
+                if ev.key in counter_keys:
                     ev.stance = "반대"
 
-        return {"trl_result": ViewResult(by_tech=by_tech), "evidence": new_evidence}
+        return {
+            "trl_result": ViewResult(by_tech=by_tech),
+            "raw_evidence": new_evidence,
+            # 독립 실행 스크립트 호환. 통합 Graph는 raw 영역으로만 병합함.
+            "evidence": new_evidence,
+        }

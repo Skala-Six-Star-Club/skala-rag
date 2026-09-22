@@ -2,7 +2,8 @@
 다른 방식과의 차이를 추출함.
 
 입력: state["techs"]
-출력: {"tech_profiles": ..., "evidence": [...], "references": [...]}
+출력: {"tech_profiles": ..., "raw_evidence": [...], "raw_references": [...]}
+(근거는 provisional key로 발급되고 evidence_finalize가 최종 번호를 부여함)
 
 검색 설정(3차 비교실험 채택안, 2026-09-22): 절 인식 청킹 + Qwen3-Embedding-0.6B
 + Query Rewriting 끔(config.QUERY_REWRITING). 질의는 코드가 고정하고, role=target
@@ -22,7 +23,12 @@ from src.common.base_agent import BaseAgent
 from src.common.doc_pool import DOC_POOL_SPECS
 from src.common.models import get_generation_llm
 from src.common.state import AgentState, Evidence, Reference, TechProfile
-from src.common.tools import format_paper_source, get_shared_index, paper_search
+from src.common.tools import (
+    format_paper_source,
+    get_shared_index,
+    paper_search,
+    strip_citation_tokens,
+)
 
 
 class _ExtractedProfile(BaseModel):
@@ -30,7 +36,7 @@ class _ExtractedProfile(BaseModel):
     scope: str = Field(description="적용 범위(어떤 모델/워크로드/하드웨어에 적용되는가), [근거#N] 포함")
     limitations: str = Field(description="논문이 스스로 밝힌 한계와 전제 조건, [근거#N] 포함")
     differentiation: str = Field(description="같은 진영 다른 방식과의 차이, 비교 논문 근거 [근거#N] 포함")
-    evidence_ids: list[int] = Field(description="위 네 항목에서 실제로 인용한 근거 번호 전체")
+    evidence_ids: list[int] = Field(description="위 네 항목에서 실제로 인용한 [근거#N]의 N 전체")
 
 
 _PROMPT = """\
@@ -107,7 +113,7 @@ class TechResearchAgent(BaseAgent):
         tech_profiles: dict[str, TechProfile] = {}
         new_evidence: list[Evidence] = []
         new_references: list[Reference] = []
-        next_id = self.next_evidence_id(state)
+        ordinal = 0
         llm = get_generation_llm().with_structured_output(_ExtractedProfile)
 
         for tech in techs:
@@ -133,28 +139,27 @@ class TechResearchAgent(BaseAgent):
                 self.index, diff_query, k=config.DEFAULT_TOP_K, role="comparison", camp=tech.camp
             )
 
-            def _register(docs, label: str) -> list[str]:
-                nonlocal next_id
+            key_by_num: dict[int, str] = {}
+
+            def _register(docs) -> list[str]:
+                nonlocal ordinal
                 passages = []
                 for doc in docs:
-                    new_evidence.append(
-                        Evidence(
-                            id=next_id,
-                            tech=tech.name,
-                            perspective="tech_research",
-                            stance="지지",
-                            source_type="논문",
-                            source=format_paper_source(doc.metadata.get("tech", tech.name), doc),
-                            quote=doc.page_content[:200],
-                        )
+                    ev = self.new_evidence(
+                        state, tech.name, ordinal,
+                        perspective="tech_research", source_type="논문",
+                        source=format_paper_source(doc.metadata.get("tech", tech.name), doc),
+                        quote=doc.page_content[:200],
                     )
-                    passages.append(f"[근거#{next_id}] ({doc.metadata.get('tech')}, p.{doc.metadata.get('page')}) {doc.page_content}")
-                    next_id += 1
+                    new_evidence.append(ev)
+                    num = len(key_by_num) + 1  # 프롬프트용 로컬 번호(기술마다 1부터)
+                    key_by_num[num] = ev.key
+                    passages.append(f"[근거#{num}] ({doc.metadata.get('tech')}, p.{doc.metadata.get('page')}) {doc.page_content}")
+                    ordinal += 1
                 return passages
 
-            overview_passages = _register(overview_docs + limit_docs, "개요")
-            diff_passages = _register(diff_docs, "비교")
-            tech_ids = {e.id for e in new_evidence if e.tech == tech.name}
+            overview_passages = _register(overview_docs + limit_docs)
+            diff_passages = _register(diff_docs)
 
             extracted: _ExtractedProfile = llm.invoke(  # type: ignore[assignment]
                 _PROMPT.format(
@@ -164,13 +169,16 @@ class TechResearchAgent(BaseAgent):
                     diff_passages="\n\n".join(diff_passages) or "(없음)",
                 )
             )
+            cited_keys = [key_by_num[n] for n in dict.fromkeys(extracted.evidence_ids) if n in key_by_num]
             tech_profiles[tech.name] = TechProfile(
                 tech=tech.name,
-                overview=extracted.overview,
-                scope=extracted.scope,
-                limitations=extracted.limitations,
-                differentiation=extracted.differentiation,
-                evidence_ids=sorted(i for i in set(extracted.evidence_ids) if i in tech_ids),
+                # 본문 안의 로컬 번호 토큰은 제거함. 최종 인용 표기는 report(7.10)가
+                # evidence_finalize 이후의 evidence_ids로 다시 붙임.
+                overview=strip_citation_tokens(extracted.overview),
+                scope=strip_citation_tokens(extracted.scope),
+                limitations=strip_citation_tokens(extracted.limitations),
+                differentiation=strip_citation_tokens(extracted.differentiation),
+                evidence_keys=cited_keys,
             )
             ref = _reference_for(tech.name)
             if ref is not None:
@@ -178,6 +186,10 @@ class TechResearchAgent(BaseAgent):
 
         return {
             "tech_profiles": tech_profiles,
+            "raw_evidence": new_evidence,
+            "raw_references": new_references,
+            # 독립 실행 스크립트의 기존 계약과 호환. 통합 Graph는
+            # _normalize_parallel_update가 raw 영역으로만 병합함.
             "evidence": new_evidence,
             "references": new_references,
         }

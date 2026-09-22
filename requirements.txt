@@ -16,3 +16,7 @@ ddgs==9.16.0        # TAVILY_API_KEY 없을 때 web_search 폴백
 
 matplotlib==3.10.0
 numpy==2.2.1
+
+# report 에이전트 PDF 변환 (7.10절) — 순수 Python, 시스템 라이브러리 불필요
+markdown==3.10.3
+xhtml2pdf==0.2.20
