@@ -20,28 +20,42 @@ OLLAMA_GENERATION_MODEL = os.getenv("OLLAMA_GENERATION_MODEL", "")
 
 
 def _detect_device() -> str:
-    """EMBEDDING_DEVICE 미설정/auto면 CUDA 가용 여부로 자동 결정함."""
+    """EMBEDDING_DEVICE 미설정/auto면 cuda -> mps -> cpu 순으로 가용한 장치를 고름.
+
+    - cuda: Linux/Windows NVIDIA GPU
+    - mps: Apple Silicon Mac (Metal). torch.backends.mps.is_available()로 확인
+    - cpu: 그 외
+    명시적으로 cpu / cuda / cuda:0 / mps를 넣으면 그대로 씀.
+    """
     requested = os.getenv("EMBEDDING_DEVICE", "auto").strip().lower()
     if requested and requested != "auto":
         return requested
     try:
         import torch
-
-        return "cuda" if torch.cuda.is_available() else "cpu"
     except ImportError:
         return "cpu"
+    if torch.cuda.is_available():
+        return "cuda"
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available() and mps.is_built():
+        return "mps"
+    return "cpu"
 
 
 # 6.1절 채택 임베딩. 2026-09-22 비교실험(3.1절)에서 MRR 기준 최상위였던
 # Qwen3-Embedding-0.6B로 교체함(bge-m3 대비 camp 전체 MRR 0.844 -> 0.892).
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
 EMBEDDING_DEVICE = _detect_device()
-# GPU에서는 배치를 키워 임베딩 처리량을 올림(CPU 기본값 32는 그대로 둠).
+EMBEDDING_IS_CUDA = EMBEDDING_DEVICE.startswith("cuda")
+EMBEDDING_IS_MPS = EMBEDDING_DEVICE == "mps"
+# CUDA에서는 배치를 키워 임베딩 처리량을 올림. MPS는 통합 메모리를 CPU와 나눠 쓰므로
+# CPU 기본값(32)을 유지함.
 EMBEDDING_BATCH_SIZE = int(
-    os.getenv("EMBEDDING_BATCH_SIZE", "64" if EMBEDDING_DEVICE.startswith("cuda") else "32")
+    os.getenv("EMBEDDING_BATCH_SIZE") or ("64" if EMBEDDING_IS_CUDA else "32")
 )
-# CUDA에서는 fp16으로 로드해 메모리와 시간을 절반 가까이 줄임.
-EMBEDDING_FP16 = os.getenv("EMBEDDING_FP16", "1") == "1" and EMBEDDING_DEVICE.startswith("cuda")
+# fp16은 CUDA에서만 켬. MPS는 fp16 연산 정밀도 문제(일부 모델에서 NaN)가 보고돼
+# 기본 dtype(fp32)로 두고, EMBEDDING_FP16=1을 명시해도 CUDA가 아니면 무시함.
+EMBEDDING_FP16 = os.getenv("EMBEDDING_FP16", "1") == "1" and EMBEDDING_IS_CUDA
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 

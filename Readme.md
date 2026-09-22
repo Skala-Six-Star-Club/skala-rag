@@ -116,6 +116,10 @@ cp .env.example .env
 # .env에 OPENAI_API_KEY, TAVILY_API_KEY 채우기
 ```
 
+임베딩 장치는 `EMBEDDING_DEVICE=auto`(기본)면 cuda → mps(Apple Silicon) → cpu 순으로
+자동 선택함. fp16 로드는 CUDA에서만 켜지고 MPS/CPU는 fp32로 동작함. 강제하려면
+`cpu` / `cuda` / `mps`를 직접 넣을 것.
+
 ### Ollama 설치 및 실행 (검수 모델 Qwen3-8B, 6.3절)
 
 `judge`, `synthesize`, `market_eval`, `stakeholder_eval`, `report` 2부를 돌리려면
@@ -154,7 +158,7 @@ arXiv ID 참고, 예: `https://arxiv.org/pdf/2504.19874` → `TurboQuant.pdf`).
 | `DeepSeek-V2.pdf` | DeepSeek-V2 | 2405.04434 |
 | `KIVI.pdf` | KIVI | 2402.02750 |
 | `Dynamic KV Cache Mgmt.pdf` | InfiniGen | 2406.19707 |
-| `PIM:CXL.pdf` | PIM/CXL | 2511.00321 |
+| `PIM-CXL.pdf` | PIM/CXL | 2511.00321 |
 
 파일명은 `src/common/doc_pool.py`의 `DOC_POOL_SPECS`에 고정돼 있음(코드가 그 이름을
 그대로 찾음) — 다른 이름으로 받았다면 이 표대로 리네임하거나 `doc_pool.py`를 맞춰 고칠 것.

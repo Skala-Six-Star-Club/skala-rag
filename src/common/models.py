@@ -78,7 +78,7 @@ def _build_embedding(model_name: str) -> HuggingFaceEmbeddings:
 def get_embedding_model() -> HuggingFaceEmbeddings:
     """채택 임베딩(config.EMBEDDING_MODEL, 기본 Qwen3-Embedding-0.6B). 벡터는 정규화 후 내적 유사도로 사용함(6.1절).
 
-    EMBEDDING_DEVICE=auto(기본)면 CUDA 가용 시 GPU에 fp16으로 올림.
+    EMBEDDING_DEVICE=auto(기본)면 cuda -> mps -> cpu 순으로 올림. fp16은 CUDA에서만 씀.
     """
     return _build_embedding(config.EMBEDDING_MODEL)
 
@@ -89,7 +89,7 @@ def get_embedding_model_by_name(model_name: str) -> HuggingFaceEmbeddings:
 
 
 def release_embedding_model(embedding: HuggingFaceEmbeddings | None) -> None:
-    """비교실험에서 후보 모델을 바꿔 탈 때 GPU 메모리를 되돌려줌.
+    """비교실험에서 후보 모델을 바꿔 탈 때 GPU(CUDA/MPS) 메모리를 되돌려줌.
 
     24GB급 단일 GPU에 bge-m3(약 2.2GB fp16)·e5-large·Qwen3-Embedding을 차례로
     올릴 때 이전 모델이 남아 있으면 Ollama 검수 모델과 함께 OOM이 날 수 있음.
@@ -103,8 +103,10 @@ def release_embedding_model(embedding: HuggingFaceEmbeddings | None) -> None:
     gc.collect()
     try:
         import torch
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
     except ImportError:
-        pass
+        return
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available() and hasattr(torch, "mps"):
+        torch.mps.empty_cache()
