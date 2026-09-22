@@ -97,7 +97,7 @@ class Conflict(BaseModel):
 
 
 class Synthesis(BaseModel):
-    """7.8 synthesize 출력과 관점별 근거 신뢰도 집계."""
+    """7.8 synthesize의 서술 결과와 관점별 근거량의 집계값."""
 
     agreements: list[str] = Field(default_factory=list)
     conflicts: list[Conflict] = Field(default_factory=list)
@@ -140,8 +140,10 @@ class AgentState(TypedDict, total=False):
 
     retry_targets: list[str]
     retry_count: int
-    perspective_confidence: dict[str, dict[str, float]]
     rewrite_count: int
+
+    # evidence_check가 계산한 관점별·기술별 근거량 점수(0~1).
+    perspective_confidence: dict[str, dict[str, float]]
 
     synthesis: Synthesis
     judge_feedback: JudgeFeedback
