@@ -21,6 +21,8 @@ from matplotlib import font_manager, rcParams
 from matplotlib import pyplot as plt
 from pydantic import BaseModel, Field
 
+from src.common.state import ViewResult
+
 # 한글 라벨이 깨지지 않도록, 설치돼 있는 한글 폰트를 찾아서 씀(없으면 기본값 유지).
 for _font_name in ("AppleGothic", "Malgun Gothic", "NanumGothic", "Noto Sans CJK KR"):
     if _font_name in {f.name for f in font_manager.fontManager.ttflist}:
@@ -152,6 +154,36 @@ def plot_bar_comparison(
 # ---------------------------------------------------------------------------
 # 8.2절: LLM-as-a-Judge 루브릭 (market_eval/stakeholder_eval/synthesize/report)
 # ---------------------------------------------------------------------------
+
+
+def render_view_result_md(view_result: ViewResult) -> str:
+    """ViewResult를 사람이 읽는 마크다운으로 직렬화함.
+
+    test_runner.py 리포트에 str(view_result)(파이썬 repr, 한 줄로 뭉개짐)를 그대로
+    박아 넣으면 읽기 어려워서 대신 씀. 채점용 target_text에도 이 형태를 쓰면
+    루브릭 채점 모델도 더 안정적으로 읽음.
+    """
+    def _refs(c) -> str:
+        # 최종화 전(id 미확정) 단계에서는 evidence_keys를, 최종화 후에는
+        # evidence_ids를 씀 — 최종화 여부와 무관하게 실제로 있는 쪽을 보여줌.
+        ids = ", ".join(f"#{i}" for i in c.evidence_ids)
+        keys = ", ".join(c.evidence_keys)
+        return ids or keys or "근거 없음"
+
+    lines: list[str] = []
+    for tech, tv in view_result.by_tech.items():
+        lines.append(f"### {tech}\n")
+        lines.append("**확인된 사실**")
+        for c in tv.confirmed_facts:
+            lines.append(f"- {c.statement} ({_refs(c)})")
+        lines.append("\n**반대/우려 사실**")
+        for c in tv.counter_facts:
+            lines.append(f"- {c.statement} ({_refs(c)})")
+        lines.append("\n**미확인 항목**")
+        for item in tv.unconfirmed_items:
+            lines.append(f"- {item}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 class RubricScore(BaseModel):
