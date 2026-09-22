@@ -71,14 +71,15 @@ class DomainEvalAgent(BaseAgent):
         self.last_queries: dict[str, dict[str, str]] = {}
 
     def run(self, state: AgentState) -> dict[str, Any]:
-        techs = state["techs"]
+        techs = self.scoped_techs(state)  # Send fan-out이면 기술 하나, 아니면 전체
         domain = state["domain"]
         is_retry = self.name in (state.get("retry_targets") or [])
         prior = state.get("domain_result")
         new_evidence: list[Evidence] = []
         ordinal = 0
         by_tech: dict[str, TechViewResult] = {}
-        self.last_queries = {}
+        if not state.get("tech_scope"):
+            self.last_queries = {}
 
         for tech in techs:
             # 12장 "반복 1": 재검색 시 질의 초점을 한계·실패 사례·후속 검증으로 바꿈
