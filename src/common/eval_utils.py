@@ -131,95 +131,18 @@ _STATUS_BAD = "#d03b3b"
 _INK = "#1f2933"
 _INK_MUTED = "#6b7280"
 
-# 같은 지표를 여러 조건에서 비교하는 그래프 두 종류.
-# - plot_condition_comparison: 전/후처럼 조건이 2개(또는 순서가 있는 소수)일 때 지표별 점·선
-#   (slope chart). 조건 간 변화 방향과 폭이 한눈에 읽힘.
-# - plot_bar_comparison: 임베딩 후보처럼 조건이 명목형(순서 없음)이면 선이 "순서"를 암시하므로
-#   막대를 유지함. 값 라벨을 붙여 좁은 차이도 읽히게 함.
+# 같은 지표를 여러 조건(청킹 버전, 임베딩 후보, 리라이팅 전/후, 기술)에서 비교하는 막대그래프.
 # 색은 고정 순서(파랑, 주황, 청록, 노랑)로 색각 이상 분리 검증을 통과한 조합이고, 청록·노랑은
-# 배경 대비가 낮아 값 라벨과 직접 표기를 항상 함께 둠.
+# 배경 대비가 낮아 값 라벨을 항상 함께 둠. 막대 사이 여백과 옅은 가로 격자만 두고 테두리는 뺌.
 _SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
 
 
 def _style_axes(ax) -> None:
-    ax.grid(axis="y", color="#e5e7eb", linewidth=0.8)
-    for side in ("top", "right"):
+    ax.grid(axis="y", color="#e5e7eb", linewidth=0.8, zorder=0)
+    for side in ("top", "right", "left"):
         ax.spines[side].set_visible(False)
-    for side in ("left", "bottom"):
-        ax.spines[side].set_color("#d1d5db")
-    ax.tick_params(colors=_INK_MUTED)
-
-
-def _spread(values: list[float], min_gap: float) -> list[float]:
-    """같은 x에서 겹치는 라벨 y좌표를 위아래로 밀어 최소 간격을 확보함(순서 유지)."""
-    order = sorted(range(len(values)), key=lambda i: values[i])
-    placed = []
-    for i in order:
-        y = values[i]
-        if placed and y - placed[-1][1] < min_gap:
-            y = placed[-1][1] + min_gap
-        placed.append((i, y))
-    out = [0.0] * len(values)
-    for i, y in placed:
-        out[i] = y
-    return out
-
-
-def plot_condition_comparison(
-    conditions: list[str],
-    series: dict[str, list[float]],
-    title: str,
-    ylabel: str,
-    save_path: Path,
-    ylim: tuple[float, float] | None = None,
-) -> None:
-    """조건(x) x 지표(선) 비교 그래프. series[지표명] = 조건 순서대로의 값.
-
-    전/후 비교(조건 2개)용 slope chart. 지표마다 고정 순서의 색, 마지막 조건 옆 직접 표기,
-    점마다 값 라벨. 같은 값이 겹치면 라벨을 위아래로 벌리고, 같은 x·같은 값의 수치 라벨은
-    한 번만 적음.
-    """
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    n_cond = len(conditions)
-    fig, ax = plt.subplots(figsize=(max(9.0, 1.9 * n_cond + 4.6), 4.4))
-    xs = list(range(n_cond))
-    all_vals = [v for vals in series.values() for v in vals]
-    if ylim is None:
-        lo, hi = (min(all_vals), max(all_vals)) if all_vals else (0.0, 1.0)
-        pad = max((hi - lo) * 0.25, 0.05)
-        ylim = (max(0.0, lo - pad), hi + pad)
-    names = list(series)
-    for i, name in enumerate(names):
-        color = _SERIES_COLORS[i % len(_SERIES_COLORS)]
-        ax.plot(xs, series[name], color=color, linewidth=2, marker="o", markersize=7,
-                markeredgecolor="white", markeredgewidth=1.5, label=name, zorder=3)
-    # 값 라벨: 같은 x에서 같은 값은 한 번만
-    for x in xs:
-        seen: set[float] = set()
-        for name in names:
-            v = round(series[name][x], 3)
-            if v in seen:
-                continue
-            seen.add(v)
-            ax.annotate(f"{v:.3f}", (x, v), textcoords="offset points", xytext=(0, 7),
-                        ha="center", fontsize=7.5, color=_INK_MUTED)
-    # 직접 표기: 끝점 y가 겹치면 벌림
-    ends = [series[n][-1] for n in names]
-    label_ys = _spread(ends, (ylim[1] - ylim[0]) * 0.07)
-    for i, (name, y) in enumerate(zip(names, label_ys)):
-        ax.text(xs[-1] + 0.08, y, name, va="center", fontsize=8,
-                color=_SERIES_COLORS[i % len(_SERIES_COLORS)])
-    ax.set_xticks(xs)
-    ax.set_xticklabels(conditions, fontsize=9)
-    ax.set_xlim(-0.35, n_cond - 1 + 2.1)
-    ax.set_ylim(*ylim)
-    ax.set_ylabel(ylabel, fontsize=9, color=_INK_MUTED)
-    ax.set_title(title, loc="left", fontsize=11, color=_INK, pad=26)
-    _style_axes(ax)
-    ax.legend(loc="lower left", bbox_to_anchor=(0, 1.02), ncol=len(names), fontsize=8, frameon=False)
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=150)
-    plt.close(fig)
+    ax.spines["bottom"].set_color("#d1d5db")
+    ax.tick_params(colors=_INK_MUTED, length=0)
 
 
 def plot_bar_comparison(
@@ -230,32 +153,35 @@ def plot_bar_comparison(
     save_path: Path,
     ylim: tuple[float, float] | None = None,
 ) -> None:
-    """명목형 조건(x) x 지표(막대 색) 비교. 막대마다 값 라벨, 막대 사이 여백, 고정 순서 색."""
+    """조건(x) x 지표(막대 색) 비교. 막대마다 값 라벨, 막대 사이 여백, 고정 순서 색, 범례는 그림 위."""
     save_path.parent.mkdir(parents=True, exist_ok=True)
     n_series = max(len(series), 1)
-    width = 0.8 / n_series
-    fig, ax = plt.subplots(figsize=(max(6.0, 0.55 * len(labels) * n_series + 2.5), 4.4))
-    x = range(len(labels))
+    n_labels = max(len(labels), 1)
+    group_w = 0.72
+    width = group_w / n_series
+    fig, ax = plt.subplots(figsize=(max(6.4, 0.5 * n_labels * n_series + 2.2), 3.9))
+    x = range(n_labels)
     all_vals = [v for vals in series.values() for v in vals]
     integral = all(float(v).is_integer() for v in all_vals)
     fmt = (lambda v: f"{int(v)}") if integral else (lambda v: f"{v:.3f}")
     for i, (name, values) in enumerate(series.items()):
-        offsets = [xi + i * width for xi in x]
+        offsets = [xi - group_w / 2 + width * (i + 0.5) for xi in x]
         color = _SERIES_COLORS[i % len(_SERIES_COLORS)]
-        ax.bar(offsets, values, width=width * 0.9, label=name, color=color, zorder=3)
+        ax.bar(offsets, values, width=width * 0.86, label=name, color=color, zorder=3, linewidth=0)
         for xo, v in zip(offsets, values):
             ax.annotate(fmt(v), (xo, v), textcoords="offset points", xytext=(0, 3),
-                        ha="center", fontsize=7, color=_INK_MUTED)
-    ax.set_xticks([xi + width * (n_series - 1) / 2 for xi in x])
-    ax.set_xticklabels(labels, fontsize=9)
+                        ha="center", fontsize=7.5, color=_INK)
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(labels, fontsize=9.5, color=_INK)
     if ylim is None:
-        top = max((v for vals in series.values() for v in vals), default=1.0)
+        top = max(all_vals, default=1.0)
         ylim = (0, top * 1.12)
     ax.set_ylim(*ylim)
     ax.set_ylabel(ylabel, fontsize=9, color=_INK_MUTED)
-    ax.set_title(title, loc="left", fontsize=11, color=_INK, pad=26)
+    ax.set_title(title, loc="left", fontsize=11.5, color=_INK, pad=24)
     _style_axes(ax)
-    ax.legend(loc="lower left", bbox_to_anchor=(0, 1.02), ncol=min(n_series, 4), fontsize=8, frameon=False)
+    ax.legend(loc="lower left", bbox_to_anchor=(0, 1.0), ncol=min(n_series, 4), fontsize=8,
+              frameon=False, handlelength=1.2, columnspacing=1.2)
     fig.tight_layout()
     fig.savefig(save_path, dpi=150)
     plt.close(fig)
