@@ -31,6 +31,7 @@ from src.common.eval_utils import (
     load_golden_dataset_all,
     mrr,
     plot_bar_comparison,
+    plot_condition_comparison,
 )
 from src.common.models import (
     get_embedding_model,
@@ -160,7 +161,7 @@ def run_chunking_comparison(goldens: list[GoldenQuery]):
     for label, naive in zip(labels, (False, True)):
         index = _get_or_build_index(embedding, naive, _index_dir(label.split("_")[0], ADOPTED_EMBEDDING))
         _score_both_filters(index, goldens, scores)
-    plot_bar_comparison(
+    plot_condition_comparison(
         labels, scores, f"청킹 전략 비교 ({AGENT_NAME})", "score",
         HERE / "report_assets" / "chunking_comparison.png",
     )
@@ -206,7 +207,7 @@ def run_query_rewriting_comparison(goldens: list[GoldenQuery]):
     scores = _empty_filter_scores()
     for use_rewrite in (False, True):
         _score_both_filters(index, goldens, scores, use_rewrite=use_rewrite)
-    plot_bar_comparison(
+    plot_condition_comparison(
         labels, scores, f"Query Rewriting 비교 ({AGENT_NAME})", "score",
         HERE / "report_assets" / "query_rewriting_comparison.png",
     )
