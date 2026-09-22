@@ -10,9 +10,6 @@ venv/
 .env.*
 !.env.example
 
-# Doc Pool source PDFs (copyrighted arXiv papers, fetched locally per README)
-data/doc_pool/*.pdf
-
 # Embedding DB / FAISS indexes (rebuildable, per-teammate versioned)
 scripts/*/pdf/v*/index*/
 scripts/*/pdf/v*/*.faiss
