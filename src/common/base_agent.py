@@ -77,8 +77,13 @@ class BaseAgent(ABC):
         source: str,
         quote: str,
         stance: str = "지지",
+        reference_url: str | None = None,
     ):
-        """provisional key가 붙은 Evidence를 만듦(id는 evidence_finalize가 부여)."""
+        """provisional key가 붙은 Evidence를 만듦(id는 evidence_finalize가 부여).
+
+        reference_url은 이 근거가 속한 참고문헌의 URL. 같은 URL의 Reference를
+        raw_references에 함께 넣어야 report가 REFERENCE 절에 실을 수 있음.
+        """
         from src.common.state import Evidence
 
         return Evidence(
@@ -89,6 +94,7 @@ class BaseAgent(ABC):
             source_type=source_type,
             source=source,
             quote=quote,
+            reference_url=reference_url,
         )
 
     def evidence_attempt(self, state: AgentState) -> int:

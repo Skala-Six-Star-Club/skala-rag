@@ -137,7 +137,11 @@ def polish_and_verify(raw_text: str, valid_ids: set[int]) -> str:
 
 
 def filter_references(references: list[Reference], cited_evidence_sources: set[str]) -> list[Reference]:
-    """본문에서 실제로 인용된 근거의 출처만 REFERENCE에 남김(13장)."""
+    """본문에서 실제로 인용된 근거의 출처만 REFERENCE에 남김(13장).
+
+    cited_evidence_sources에는 인용된 Evidence의 reference_url(논문 arXiv URL, 웹 URL)과
+    source를 함께 넣음. 논문 근거의 source는 "기술 p.쪽 절" 형식이라 URL로만 맞음.
+    """
     return [r for r in references if r.url in cited_evidence_sources or r.title in cited_evidence_sources]
 
 
@@ -458,8 +462,16 @@ class ReportAgent(BaseAgent):
         cited_ids = {
             int(n) for body in polished_sections.values() for n in _CITATION_RE.findall(body)
         }
-        cited_sources = {e.source for e in state.get("evidence", []) if e.id in cited_ids}
+        cited_sources = {
+            key
+            for e in state.get("evidence", [])
+            if e.id in cited_ids
+            for key in (e.source, getattr(e, "reference_url", None))
+            if key
+        }
         references = filter_references(state.get("references", []), cited_sources)
+        # 본문은 [근거#N]만 인용하므로 REFERENCE 번호는 남은 항목 기준으로 1부터 다시 매김
+        references = [r.model_copy(update={"id": i}) for i, r in enumerate(references, 1)]
 
         title = f"# KV cache 최적화 기술 다관점 평가 보고서: {' vs '.join(_tech_names(techs)) or '(기술 미지정)'}"
         body = "\n\n".join(f"## {t}\n\n{text}" for t, text in polished_sections.items())
