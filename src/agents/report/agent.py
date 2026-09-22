@@ -27,6 +27,7 @@ from src.common.base_agent import BaseAgent
 from src.common.models import get_generation_llm
 from src.common.state import (
     AgentState,
+    Evidence,
     JudgeFeedback,
     Reference,
     Synthesis,
@@ -37,6 +38,19 @@ from src.common.state import (
 )
 
 _CITATION_RE = re.compile(r"\[근거#(\d+)\]")
+# synthesize 등 상위 노드가 "[근거#25,#26, 27]"처럼 한 괄호에 여러 번호를 넣는 경우가 있음.
+# 인용 안전장치와 REFERENCE 집계는 [근거#N] 단일 토큰만 세므로, 조립 직후 이를 풀어 씀.
+_MULTI_CITATION_RE = re.compile(r"\[근거#\s*\d+(?:\s*,\s*#?\s*\d+)+\s*\]")
+
+
+def normalize_citations(text: str) -> str:
+    """[근거#25,#26, 27] -> [근거#25][근거#26][근거#27]. 단일 토큰은 그대로 둠."""
+
+    def _expand(m: re.Match) -> str:
+        nums = re.findall(r"\d+", m.group(0))
+        return "".join(f"[근거#{n}]" for n in nums)
+
+    return _MULTI_CITATION_RE.sub(_expand, text)
 _OUTPUT_DIR = Path("output")
 _REPORT_OUTPUT_PATH = _OUTPUT_DIR / "report.md"
 _REPORT_PDF_PATH = _OUTPUT_DIR / "report.pdf"
@@ -136,8 +150,40 @@ def polish_and_verify(raw_text: str, valid_ids: set[int]) -> str:
     return verify_citations(raw_text, polished, valid_ids)
 
 
+def order_references_by_citation(
+    references: list[Reference], cited_order: list[int], evidence: list[Evidence]
+) -> list[Reference]:
+    """REFERENCE를 본문 인용 순서로 정렬하고 1부터 다시 번호를 매김(13장).
+
+    evidence_finalize는 참고문헌을 URL 순으로 두는데, 보고서에서는 처음 인용된 자료가
+    먼저 나오는 편이 관례임. 근거 번호가 본문에 처음 나온 순서를 따라 그 근거의
+    reference_url(없으면 source)에 해당하는 참고문헌을 차례로 세우고, 인용 위치를 찾지
+    못한 항목은 뒤에 URL 순으로 붙임. 본문은 [근거#N]만 쓰므로 번호 재부여는 안전함.
+    """
+    by_id = {e.id: e for e in evidence if e.id is not None}
+    first_pos: dict[str, int] = {}
+    for pos, eid in enumerate(cited_order):
+        e = by_id.get(eid)
+        if e is None:
+            continue
+        for key in (getattr(e, "reference_url", None), e.source):
+            if key and key not in first_pos:
+                first_pos[key] = pos
+
+    def _rank(r: Reference) -> tuple[int, str]:
+        candidates = [first_pos[k] for k in (r.url, r.title) if k and k in first_pos]
+        return (min(candidates) if candidates else len(cited_order), r.url or r.title)
+
+    ordered = sorted(references, key=_rank)
+    return [r.model_copy(update={"id": i}) for i, r in enumerate(ordered, 1)]
+
+
 def filter_references(references: list[Reference], cited_evidence_sources: set[str]) -> list[Reference]:
-    """본문에서 실제로 인용된 근거의 출처만 REFERENCE에 남김(13장)."""
+    """본문에서 실제로 인용된 근거의 출처만 REFERENCE에 남김(13장).
+
+    cited_evidence_sources에는 인용된 Evidence의 reference_url(논문 arXiv URL, 웹 URL)과
+    source를 함께 넣음. 논문 근거의 source는 "기술 p.쪽 절" 형식이라 URL로만 맞음.
+    """
     return [r for r in references if r.url in cited_evidence_sources or r.title in cited_evidence_sources]
 
 
@@ -450,16 +496,28 @@ class ReportAgent(BaseAgent):
             "6. 한계점": render_limitations(judge_feedback, collect_unconfirmed_items(*view_results)),
         }
 
+        sections = {title: normalize_citations(body) for title, body in sections.items()}
         polished_sections = {
             title: polish_and_verify(body, valid_ids) for title, body in sections.items()
         }
         polished_sections["6. 한계점"] = polished_sections["6. 한계점"].rstrip() + "\n\n" + _ITME_DISCLOSURE
 
-        cited_ids = {
-            int(n) for body in polished_sections.values() for n in _CITATION_RE.findall(body)
+        # 본문(SUMMARY -> 6. 한계점 순)에 [근거#N]이 처음 등장하는 순서
+        cited_order: list[int] = []
+        for body in polished_sections.values():
+            for n in _CITATION_RE.findall(body):
+                if int(n) not in cited_order:
+                    cited_order.append(int(n))
+        cited_ids = set(cited_order)
+        cited_sources = {
+            key
+            for e in state.get("evidence", [])
+            if e.id in cited_ids
+            for key in (e.source, getattr(e, "reference_url", None))
+            if key
         }
-        cited_sources = {e.source for e in state.get("evidence", []) if e.id in cited_ids}
         references = filter_references(state.get("references", []), cited_sources)
+        references = order_references_by_citation(references, cited_order, state.get("evidence", []))
 
         title = f"# KV cache 최적화 기술 다관점 평가 보고서: {' vs '.join(_tech_names(techs)) or '(기술 미지정)'}"
         body = "\n\n".join(f"## {t}\n\n{text}" for t, text in polished_sections.items())

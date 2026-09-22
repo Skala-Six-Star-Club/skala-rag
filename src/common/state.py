@@ -42,6 +42,9 @@ class Evidence(BaseModel):
     source_type: SourceType
     source: str  # 논문명/절/쪽 또는 URL
     quote: str
+    # 이 근거가 속한 참고문헌의 URL(논문은 arXiv abs, 웹은 페이지 URL). report(7.10)가
+    # 본문에 인용된 근거만 골라 REFERENCE를 만들 때 Reference.url과 이 값을 맞춰 봄.
+    reference_url: str | None = None
 
 
 class Reference(BaseModel):

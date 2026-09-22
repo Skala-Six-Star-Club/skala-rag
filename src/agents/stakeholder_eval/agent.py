@@ -16,8 +16,8 @@ from __future__ import annotations
 from typing import Any
 
 from src.common.base_agent import BaseAgent
-from src.common.state import AgentState, Evidence, TechViewResult, ViewResult
-from src.common.tools import extract_view_result, web_search
+from src.common.state import AgentState, Evidence, Reference, TechViewResult, ViewResult
+from src.common.tools import extract_view_result, web_reference, web_search
 
 _QUERY_TEMPLATES = [
     "{tech} {anchor} 경쟁 기술 반응",
@@ -46,6 +46,7 @@ class StakeholderEvalAgent(BaseAgent):
     def run(self, state: AgentState) -> dict[str, Any]:
         techs = self.scoped_techs(state)  # Send fan-out이면 기술 하나, 아니면 전체
         new_evidence: list[Evidence] = []
+        new_references: list[Reference] = []
         ordinal = 0
         by_tech: dict[str, TechViewResult] = {}
         if not state.get("tech_scope"):
@@ -61,9 +62,10 @@ class StakeholderEvalAgent(BaseAgent):
                 for r in web_search(query, max_results=MAX_RESULTS_PER_QUERY):
                     ev = self.new_evidence(
                         state, tech.name, ordinal, perspective="stakeholder", source_type="웹",
-                        source=r.url, quote=r.content[:200],
+                        source=r.url, quote=r.content[:200], reference_url=r.url,
                     )
                     new_evidence.append(ev)
+                    new_references.append(web_reference(r))
                     num = len(key_by_num) + 1
                     key_by_num[num] = ev.key
                     passages.append(f"[근거#{num}] ({r.title}) {r.content[:300]}")
@@ -85,6 +87,8 @@ class StakeholderEvalAgent(BaseAgent):
         return {
             "stakeholder_result": ViewResult(by_tech=by_tech),
             "raw_evidence": new_evidence,
+            "raw_references": new_references,
             # 독립 실행 스크립트 호환. 통합 Graph는 raw 영역으로만 병합함.
             "evidence": new_evidence,
+            "references": new_references,
         }

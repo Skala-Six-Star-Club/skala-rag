@@ -206,6 +206,63 @@ def get_shared_index(embedding_model=None, index_dir: Path | None = None) -> FAI
     return index
 
 
+def paper_reference(tech: str):
+    """Doc Pool 논문 1편의 Reference(13장 표기용). tech는 DOC_POOL_SPECS의 기술명."""
+    from src.common.doc_pool import DOC_POOL_SPECS
+    from src.common.state import Reference
+
+    spec = next((s for s in DOC_POOL_SPECS if s["tech"] == tech), None)
+    if spec is None:
+        return None
+    return Reference(
+        id=0,  # evidence_finalize가 인용 순서로 다시 매김
+        type="paper",
+        author_or_org="arXiv",
+        year="20" + spec["arxiv"][:2],
+        title=(
+            spec["file"].removesuffix(".pdf")
+            if spec["file"].removesuffix(".pdf") == spec["tech"]
+            else f"{spec['file'].removesuffix('.pdf')} ({spec['tech']})"
+        ),
+        venue=f"arXiv:{spec['arxiv']}",
+        url=paper_reference_url(tech),
+    )
+
+
+def paper_reference_url(tech: str) -> str | None:
+    from src.common.doc_pool import DOC_POOL_SPECS
+
+    spec = next((s for s in DOC_POOL_SPECS if s["tech"] == tech), None)
+    return f"https://arxiv.org/abs/{spec['arxiv']}" if spec else None
+
+
+def web_reference(result: "WebResult"):
+    """웹 검색 결과 1건의 Reference. 작성자는 사이트 도메인, 연도는 발행일 앞 4자리."""
+    from urllib.parse import urlparse
+
+    from src.common.state import Reference
+
+    host = urlparse(result.url).netloc.removeprefix("www.") or "웹"
+    year = (result.published_date or "")[:4]
+    if not year:
+        # Tavily basic 검색은 발행일을 거의 주지 않음. URL 경로의 연도(/2026/03/ 등)를 대신 씀
+        m = re.search(r"/((?:19|20)\d{2})(?:/|-|$)", urlparse(result.url).path)
+        year = m.group(1) if m else "n.d."
+    title = (result.title or result.url).strip()
+    title = re.sub(r"\s+", " ", title)
+    if len(title) > 120:  # SNS 게시글은 본문 전체가 제목으로 오므로 잘라 냄
+        title = title[:117].rstrip() + "..."
+    return Reference(
+        id=0,
+        type="web",
+        author_or_org=host,
+        year=year,
+        title=title,
+        venue=host,
+        url=result.url,
+    )
+
+
 def format_paper_source(tech: str, doc: Document) -> str:
     """Evidence.source 표기: '<기술> p.<쪽> <절>' (13장 REFERENCE, 7.10 인용 안전장치용)."""
     return f"{tech} p.{doc.metadata.get('page')} {doc.metadata.get('section', '')}".strip()

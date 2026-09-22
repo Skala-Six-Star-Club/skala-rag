@@ -1,7 +1,7 @@
 """기술 성숙도 에이전트 (7.3절). TRL 구간을 추정하고 근거와 정보 공백을 정리함.
 
 입력: state["techs"], state["tech_profiles"]
-출력: {"trl_result": ..., "raw_evidence": [...]}
+출력: {"trl_result": ..., "raw_evidence": [...], "raw_references": [...]}
 (근거는 provisional key로 발급되고 evidence_finalize가 최종 번호를 부여함)
 
 검색 설정(3차 비교실험 채택안): 절 인식 청킹 + Qwen3-Embedding-0.6B + Query
@@ -20,12 +20,15 @@ from langchain_community.vectorstores import FAISS
 
 from src.common import config
 from src.common.base_agent import BaseAgent
-from src.common.state import AgentState, Evidence, TechViewResult, ViewResult
+from src.common.state import AgentState, Evidence, Reference, TechViewResult, ViewResult
 from src.common.tools import (
     extract_view_result,
     format_paper_source,
     get_shared_index,
+    paper_reference,
+    paper_reference_url,
     paper_search,
+    web_reference,
     web_search,
 )
 
@@ -59,6 +62,7 @@ class TrlEvalAgent(BaseAgent):
         is_retry = self.name in (state.get("retry_targets") or [])
         prior = state.get("trl_result")
         new_evidence: list[Evidence] = []
+        new_references: list[Reference] = []
         ordinal = 0
         by_tech: dict[str, TechViewResult] = {}
         if not state.get("tech_scope"):
@@ -88,6 +92,7 @@ class TrlEvalAgent(BaseAgent):
                     self.new_evidence(
                         state, tech.name, ordinal, perspective="trl", source_type="논문",
                         source=format_paper_source(tech.name, doc), quote=doc.page_content[:200],
+                        reference_url=paper_reference_url(tech.name),
                     ),
                     f"논문 p.{doc.metadata.get('page')} {doc.metadata.get('section', '')}",
                     doc.page_content,
@@ -97,12 +102,16 @@ class TrlEvalAgent(BaseAgent):
                 _add(
                     self.new_evidence(
                         state, tech.name, ordinal, perspective="trl", source_type="웹",
-                        source=r.url, quote=r.content[:200],
+                        source=r.url, quote=r.content[:200], reference_url=r.url,
                     ),
                     f"웹: {r.title} {r.published_date or ''}",
                     r.content[:600],
                 )
+                new_references.append(web_reference(r))
                 ordinal += 1
+            paper_ref = paper_reference(tech.name)
+            if paper_docs and paper_ref is not None:
+                new_references.append(paper_ref)
 
             # 재검색 시 1차 결과의 미확인 항목만 이어받음(7.3절 Context 및 Memory)
             prior_unconfirmed = (
@@ -130,6 +139,8 @@ class TrlEvalAgent(BaseAgent):
         return {
             "trl_result": ViewResult(by_tech=by_tech),
             "raw_evidence": new_evidence,
+            "raw_references": new_references,
             # 독립 실행 스크립트 호환. 통합 Graph는 raw 영역으로만 병합함.
             "evidence": new_evidence,
+            "references": new_references,
         }
