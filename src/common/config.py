@@ -25,6 +25,9 @@ EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
 DOC_POOL_DIR = Path(os.getenv("DOC_POOL_DIR", "./data/doc_pool"))
+DOC_POOL_INDEX_DIR = Path(
+    os.getenv("DOC_POOL_INDEX_DIR", "./data/doc_pool_index")
+)
 GOLDEN_DATASET_PATH = Path(
     os.getenv("GOLDEN_DATASET_PATH", "./eval/golden/golden_dataset.json")
 )
@@ -42,5 +45,6 @@ DEFAULT_TOP_K = 5
 # 임계값과 같은 성격), Golden Dataset(8.4절)으로 실측 후 조정 대상임.
 GROUNDING_MIN_SIMILARITY = float(os.getenv("GROUNDING_MIN_SIMILARITY", "0.35"))
 
-# 관점당 목표 근거 수 5~8건(7.7절)의 하한 쪽을 관점별 신뢰도 만점 기준으로 씀.
-TARGET_EVIDENCE_COUNT = 5
+# 관점당 목표 근거 수 5~8건의 하한을 신뢰도 만점 기준으로 사용한다.
+# 재검색 규칙의 최소 3건과는 별도의 값이다.
+TARGET_EVIDENCE_COUNT = int(os.getenv("TARGET_EVIDENCE_COUNT", "5"))

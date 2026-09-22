@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from src.common.models import get_generation_llm
+from src.common.evidence import make_provisional_key
 from src.common.state import AgentState
 
 
@@ -47,7 +48,23 @@ class BaseAgent(ABC):
     def rewrite_query(self, base_query: str, tech: str) -> str:
         return rewrite_query(base_query, tech)
 
-    def next_evidence_id(self, state: AgentState) -> int:
-        """evidence 리스트에 새 항목을 append할 때 쓸 다음 번호를 계산함."""
-        existing = state.get("evidence", [])
-        return max((e.id for e in existing), default=0) + 1
+    def evidence_attempt(self, state: AgentState) -> int:
+        """현재 실행이 초기 수집인지 재시도인지 반환한다."""
+
+        return 1 if self.name in (state.get("retry_targets", []) or []) else 0
+
+    def provisional_evidence_key(
+        self,
+        state: AgentState,
+        tech: str,
+        ordinal: int,
+    ) -> str:
+        """병렬 수집 단계에서 사용할 임시 Evidence key를 만든다."""
+
+        perspective = self.name.removesuffix("_eval")
+        return make_provisional_key(
+            perspective,
+            tech,
+            attempt=self.evidence_attempt(state),
+            ordinal=ordinal,
+        )

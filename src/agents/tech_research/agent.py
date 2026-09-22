@@ -2,7 +2,7 @@
 다른 방식과의 차이를 추출함.
 
 입력: state["techs"]
-출력: {"tech_profiles": ..., "evidence": [...], "references": [...]}
+출력: {"tech_profiles": ..., "raw_evidence": [...], "raw_references": [...]}
 
 내부 로직(TODO 표시)만 담당자가 채우면 됨 — paper_search 호출 지점과 State
 입출력 키는 이미 고정돼 있으므로 인터페이스를 바꿀 필요가 없음.
@@ -31,7 +31,7 @@ class TechResearchAgent(BaseAgent):
         techs = state["techs"]
         tech_profiles: dict[str, TechProfile] = {}
         new_evidence: list[Evidence] = []
-        next_id = self.next_evidence_id(state)
+        ordinal = 0
 
         for tech in techs:
             # role=target: 기술 개요는 자기 논문에서만 근거를 가져옴 (7.2 RAG 및 재검색 전략)
@@ -52,11 +52,12 @@ class TechResearchAgent(BaseAgent):
 
             # TODO(담당자): overview_docs + diff_docs를 GPT-5 mini structured output으로
             # 넘겨 TechProfile(overview, scope, limitations, differentiation)을 채움(7.2절).
-            evidence_ids: list[int] = []
+            evidence_keys: list[str] = []
             for doc in overview_docs + diff_docs:
+                evidence_key = self.provisional_evidence_key(state, tech.name, ordinal)
                 new_evidence.append(
                     Evidence(
-                        id=next_id,
+                        key=evidence_key,
                         tech=tech.name,
                         perspective="tech_research",
                         stance="지지",
@@ -65,8 +66,8 @@ class TechResearchAgent(BaseAgent):
                         quote=doc.page_content[:200],
                     )
                 )
-                evidence_ids.append(next_id)
-                next_id += 1
+                evidence_keys.append(evidence_key)
+                ordinal += 1
 
             tech_profiles[tech.name] = TechProfile(
                 tech=tech.name,
@@ -74,7 +75,15 @@ class TechResearchAgent(BaseAgent):
                 scope="TODO",
                 limitations="TODO",
                 differentiation="TODO: diff_docs 기반 비교 서술 필요",
-                evidence_ids=evidence_ids,
+                evidence_keys=evidence_keys,
             )
 
-        return {"tech_profiles": tech_profiles, "evidence": new_evidence}
+        return {
+            "tech_profiles": tech_profiles,
+            "raw_evidence": new_evidence,
+            "raw_references": [],
+            # 독립 실행 스크립트의 기존 반환 계약과 호환한다. 통합 Graph에서는
+            # _normalize_parallel_update가 이를 raw 영역으로만 병합한다.
+            "evidence": new_evidence,
+            "references": [],
+        }

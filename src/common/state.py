@@ -1,8 +1,11 @@
-"""LangGraph State 정의. docs/agentic-rag-design.md 11장 State 표를 그대로 구현함.
+"""LangGraph State 정의.
 
 필드명·타입·갱신 방식(덮어쓰기 vs 누적)은 설계서 표와 1:1로 대응시킴.
-evidence/references만 여러 노드가 동시에 쓰므로 operator.add reducer를 둠(12장,
-INVALID_CONCURRENT_GRAPH_UPDATE 회피).
+
+병렬 관점 노드는 먼저 ``raw_evidence``/``raw_references``에 임시 결과를 누적한다.
+최종화 노드가 재시도까지 끝난 뒤 번호를 확정해 ``evidence``/``references``에
+기록한다. 이렇게 분리해야 LangGraph의 ``operator.add`` reducer가 최종 결과를
+다시 붙여서 중복시키지 않는다.
 """
 
 from __future__ import annotations
@@ -29,9 +32,10 @@ class TechSpec(BaseModel):
 
 
 class Evidence(BaseModel):
-    """11장: 번호, 기술, 관점, 입장, 출처 유형, 출처, 인용문."""
+    """수집 중에는 임시 ``key``를, 최종화 후에는 연속 정수 ``id``를 사용한다."""
 
-    id: int
+    id: int | None = None
+    key: str | None = None
     tech: str
     perspective: Perspective
     stance: Stance
@@ -61,6 +65,7 @@ class TechProfile(BaseModel):
     limitations: str
     differentiation: str  # 같은 진영 다른 방식과의 차이
     evidence_ids: list[int] = Field(default_factory=list)
+    evidence_keys: list[str] = Field(default_factory=list)
 
 
 class Claim(BaseModel):
@@ -68,6 +73,7 @@ class Claim(BaseModel):
 
     statement: str
     evidence_ids: list[int] = Field(default_factory=list)
+    evidence_keys: list[str] = Field(default_factory=list)
 
 
 class TechViewResult(BaseModel):
@@ -91,14 +97,7 @@ class Conflict(BaseModel):
 
 
 class Synthesis(BaseModel):
-    """7.8 synthesize 출력. 일치점, 상충점, SUMMARY.
-
-    확장(근거 검증 & 데이터 종합 역할, 7.7절 evidence_check가 계산한
-    perspective_confidence를 그대로 통과시키고, 여기서 관점 4종을 가로지르는
-    집계값(overall_confidence, weakest_perspective)을 코드로 계산해 얹음. 기술 간
-    우열이 아니라 "이번 조사에서 어느 관점의 근거가 상대적으로 약한지"를 나타내는
-    값이라 10장 중립성 원칙과 충돌하지 않음.
-    """
+    """7.8 synthesize의 서술 결과와 관점별 근거량의 집계값."""
 
     agreements: list[str] = Field(default_factory=list)
     conflicts: list[Conflict] = Field(default_factory=list)
@@ -129,15 +128,21 @@ class AgentState(TypedDict, total=False):
     stakeholder_result: ViewResult
     domain_result: ViewResult
 
-    evidence: Annotated[list[Evidence], operator.add]
-    references: Annotated[list[Reference], operator.add]
+    # 여러 병렬 노드가 쓰는 누적 영역. evidence_finalize 이후에도 감사/디버깅용으로
+    # 남겨 두지만, 보고서와 인용 검증은 아래의 확정된 evidence를 사용한다.
+    raw_evidence: Annotated[list[Evidence], operator.add]
+    raw_references: Annotated[list[Reference], operator.add]
+
+    # evidence_finalize가 한 번에 기록하는 확정 결과(덮어쓰기 필드).
+    evidence: list[Evidence]
+    references: list[Reference]
+    evidence_finalized: bool
 
     retry_targets: list[str]
     retry_count: int
+    rewrite_count: int
 
-    # 7.7절 확장(evidence_check 담당, 근거 검증 & 데이터 종합 역할): 관점별·기술별
-    # 근거 신뢰도(0~1). evidence_check가 계산해 쓰고, synthesize가 종합 시 가중치로
-    # 참고함. {perspective: {tech: score}} 형태.
+    # evidence_check가 계산한 관점별·기술별 근거량 점수(0~1).
     perspective_confidence: dict[str, dict[str, float]]
 
     synthesis: Synthesis
