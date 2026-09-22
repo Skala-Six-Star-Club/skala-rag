@@ -108,7 +108,7 @@ _ITME_DISCLOSURE = (
 
 def collect_valid_evidence_ids(state: AgentState) -> set[int]:
     """synthesis + 관점 결과 4종에 실제로 등록된 근거 번호를 모음(7.10절)."""
-    return {e.id for e in state.get("evidence", [])}
+    return {e.id for e in state.get("evidence", []) if e.id is not None}
 
 
 def verify_citations(original_text: str, candidate_text: str, valid_ids: set[int]) -> str:

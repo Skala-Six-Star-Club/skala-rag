@@ -1,8 +1,10 @@
-"""평가 종합 에이전트 (7.8절 + 확장). 관점 결과 4종을 종합해 일치점/상충점/SUMMARY를
-생성하고, evidence_check(7.7)가 계산한 근거 신뢰도를 하나의 통합 구조(Synthesis)로
-가중 집계함. 추가 검색 없는 순수 생성 작업 + 코드 집계.
+"""평가 종합 에이전트 (7.8절 + 확장).
 
-입력: state의 관점 결과 4종 + perspective_confidence(+ 재작성 시 judge_feedback)
+관점 결과 4종을 종합하고 evidence_check가 계산한 관점별 근거 신뢰도를
+결정론적으로 집계한다. 신뢰도 수치는 기술 간 우열이 아니라 관점별 근거량을
+설명하는 값으로만 사용한다.
+
+입력: state의 관점 결과 4종, perspective_confidence(+ 재작성 시 judge_feedback)
 출력: {"synthesis": ...}
 
 judge(7.9)에서 반려되면 judge_feedback을 프롬프트에 추가해 동일 입력으로 1회
@@ -53,11 +55,10 @@ _PROMPT_TEMPLATE = """\
 
 
 class _SynthesisNarrative(BaseModel):
-    """LLM 구조화 출력 전용 스키마. Synthesis에서 서술 부분(agreements/conflicts/
-    summary)만 떼어 씀 — perspective_confidence(dict[str, dict[str, float]])처럼
-    키가 동적으로 정해지는 필드는 OpenAI Structured Outputs가 지원하지 않아
-    (모든 필드가 고정된 properties/required를 가져야 함), 그 필드들은 LLM에게
-    아예 요청하지 않고 코드가 별도로 계산해 Synthesis에 채워 넣음(아래 run()).
+    """LLM 구조화 출력용 서술 스키마.
+
+    동적 dictionary인 perspective_confidence는 LLM Structured Outputs에 직접
+    요청하지 않고, 코드가 Synthesis에 별도로 채운다.
     """
 
     agreements: list[str] = Field(default_factory=list)
@@ -68,7 +69,8 @@ class _SynthesisNarrative(BaseModel):
 def _aggregate_confidence(
     confidence: dict[str, dict[str, float]],
 ) -> tuple[float, str | None]:
-    """관점별 평균 신뢰도를 계산해 (전체 평균, 최약 관점)을 반환함. 결정론적 집계."""
+    """관점별 신뢰도를 평균 내어 전체 평균과 최약 관점을 반환한다."""
+
     if not confidence:
         return 0.0, None
 
@@ -85,7 +87,7 @@ def _aggregate_confidence(
         return 0.0, None
 
     overall = round(sum(all_scores) / len(all_scores), 2)
-    weakest = min(per_perspective_avg, key=per_perspective_avg.get) if per_perspective_avg else None
+    weakest = min(per_perspective_avg, key=per_perspective_avg.get)
     return overall, weakest
 
 
@@ -110,14 +112,10 @@ class SynthesizeAgent(BaseAgent):
         if is_rewrite:
             prompt += f"\n[이전 검수에서 지적된 사항, 반드시 반영할 것]\n{feedback}"
 
-        # TODO(담당자): 프롬프트 문구를 다듬을 것(예: 관점 결과를 dict 그대로
-        # 넣지 말고 사람이 읽기 좋은 형태로 직렬화). 구조화 출력 호출 자체는 동작함.
+        # 동적 confidence dictionary는 코드에서 조립하고, LLM에는 고정 스키마인
+        # 서술 부분만 요청한다.
         llm = get_generation_llm().with_structured_output(_SynthesisNarrative)
         narrative: _SynthesisNarrative = llm.invoke(prompt)  # type: ignore[assignment]
-
-        # 신뢰도 집계는 LLM에게 요청하지 않고 코드가 결정론적으로 채움(재현성
-        # 확보 + perspective_confidence의 동적 dict 스키마는 애초에 OpenAI
-        # Structured Outputs로 못 보냄, 위 _SynthesisNarrative 독스트링 참고).
         synthesis = Synthesis(
             agreements=narrative.agreements,
             conflicts=narrative.conflicts,
@@ -128,5 +126,7 @@ class SynthesizeAgent(BaseAgent):
         )
 
         # 12장 "반복 2" 예산(1회)을 그래프 조건 분기가 확인할 수 있게 재작성 횟수를 기록함
-        rewrite_count = state.get("rewrite_count", 0) + (1 if is_rewrite else 0)
+        rewrite_count = state.get("rewrite_count", 0)
+        if feedback is not None and rewrite_count < 1:
+            rewrite_count += 1
         return {"synthesis": synthesis, "rewrite_count": rewrite_count}
