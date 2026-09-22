@@ -2,10 +2,8 @@
 LLM-as-a-Judge 루브릭(정확성/완전성/중립성/근거연결성, 1~5)으로 달성도를
 확인함(schedule.md 2절).
 
-주의: src/agents/stakeholder_eval/agent.py의 TODO(구조화 추출)를 담당자가 채우기
-전까지는 by_tech가 빈 TechViewResult()라 낮은 점수가 나오는 게 정상임. 지금
-당장 검증하려는 게 아니라, TODO를 채운 뒤 "만든다 -> 돌린다 -> 채점한다 ->
-프롬프트를 고쳐 재실행한다"(schedule.md 1절) 루프에서 쓰라고 만든 스크립트임.
+채점 컨텍스트에 실제 수집된 근거 원문(quote)을 같이 넣어줌 — 안 그러면 "정확성"
+(인용한 근거와 실제로 부합하는가)을 판정 모델이 검증할 방법이 없어 사실상 찍게 됨.
 
 실행: python -m scripts.stakeholder_eval.test_runner
 전제: .env에 OPENAI_API_KEY, TAVILY_API_KEY(에이전트 실행용) 설정,
@@ -17,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.agents.stakeholder_eval.agent import StakeholderEvalAgent
-from src.common.eval_utils import plot_rubric_scores, score_with_rubric
+from src.common.eval_utils import plot_rubric_scores, render_view_result_md, score_with_rubric
 from src.common.models import get_judge_llm
 from src.common.state import TechSpec
 
@@ -53,8 +51,7 @@ def build_report(scores, output_text: str) -> str:
         f"모든 항목이 임계값({THRESHOLD}점) 이상임."
         if passed
         else f"임계값({THRESHOLD}점) 미달 항목 있음 — "
-        "src/agents/stakeholder_eval/agent.py의 TODO(구조화 추출 로직)를 아직 채우지 않았다면 "
-        "이는 예상된 결과임. 담당자가 프롬프트를 완성한 뒤 재실행할 것."
+        "src/agents/stakeholder_eval/agent.py의 프롬프트(_EXTRACTION_PROMPT)를 다듬고 재실행할 것."
     )
     return f"""# stakeholder_eval 테스트 리포트
 
@@ -71,9 +68,7 @@ def build_report(scores, output_text: str) -> str:
 
 ## 검사 대상 산출물
 
-```
 {output_text}
-```
 
 ## 결론
 
@@ -84,13 +79,21 @@ def build_report(scores, output_text: str) -> str:
 def main() -> None:
     agent = StakeholderEvalAgent()
     result = agent.run(FIXTURE_STATE)
-    output_text = str(result["stakeholder_result"])
+    output_text = render_view_result_md(result["stakeholder_result"])
+    evidence_text = "\n".join(
+        f"[근거#{e.id}] ({e.tech}, {e.stance}) {e.quote}" for e in result["evidence"]
+    )
 
     judge_llm = get_judge_llm()
     scores = score_with_rubric(
         judge_llm,
         target_text=output_text,
-        context="stakeholder_eval(7.6절): 경쟁 진영/도입 기업·개발자/투자 업계 반응을 두 기술에 대해 대칭적으로 조사한 결과",
+        context=(
+            "stakeholder_eval(7.6절): 경쟁 진영/도입 기업·개발자/투자 업계 반응을 두 "
+            "기술에 대해 대칭적으로 조사한 결과. 아래는 실제 수집된 근거 원문임 — "
+            "산출물이 인용한 근거 번호가 이 원문과 실제로 부합하는지 확인할 것.\n\n"
+            + evidence_text
+        ),
     )
     plot_rubric_scores(scores, f"{AGENT_NAME} 루브릭 점수", HERE / "report_assets" / "rubric_scores.png")
 
