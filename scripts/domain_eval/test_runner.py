@@ -55,29 +55,79 @@ def _get_or_build_index(embedding_model, naive: bool, index_dir: Path) -> FAISS:
     return index
 
 
-def _retrieve_all(index: FAISS, goldens: list[GoldenQuery], use_rewrite: bool) -> list[list]:
-    results = []
-    for g in goldens:
-        query = rewrite_query(g.query_ko, g.tech) if use_rewrite else g.query_ko
-        results.append(paper_search(index, query, k=TOP_K, role=g.role))
-    return results
+def _retrieve_by_filter(
+    index: FAISS, goldens: list[GoldenQuery], filter_mode: str, use_rewrite: bool
+) -> tuple[list[GoldenQuery], list[list]]:
+    """8.1절: paper_search가 실제로 쓰는 필터 조합을 각각 따로 재현해 검색함.
+
+    - "role_target": tech_research/trl_eval/domain_eval이 대상 기술 개요·판단을
+      물을 때 쓰는 필터(role=target). role=target인 골든 질의(10개)에만 적용함.
+    - "camp": "같은 진영 다른 방식과의 차이"를 물을 때 쓰는 필터(camp 전체,
+      target+comparison 포함). 골든 질의 30개 전체에 적용함.
+    반환값은 (그 필터에 실제로 해당하는 골든 질의 부분집합, 검색 결과)쌍 —
+    hit_rate_at_k/mrr에 그대로 짝지어 넘길 수 있게 순서를 맞춤.
+    """
+    if filter_mode == "role_target":
+        subset = [g for g in goldens if g.role == "target"]
+        results = [
+            paper_search(
+                index,
+                rewrite_query(g.query_ko, g.tech) if use_rewrite else g.query_ko,
+                k=TOP_K,
+                role="target",
+            )
+            for g in subset
+        ]
+        return subset, results
+    if filter_mode == "camp":
+        results = [
+            paper_search(
+                index,
+                rewrite_query(g.query_ko, g.tech) if use_rewrite else g.query_ko,
+                k=TOP_K,
+                camp=g.camp,
+            )
+            for g in goldens
+        ]
+        return goldens, results
+    raise ValueError(f"unknown filter_mode: {filter_mode}")
+
+
+def _score_both_filters(
+    index: FAISS, goldens: list[GoldenQuery], scores: dict[str, list[float]], use_rewrite: bool = False
+) -> None:
+    subset_t, retrieved_t = _retrieve_by_filter(index, goldens, "role_target", use_rewrite)
+    scores["Hit Rate@5 (role=target)"].append(hit_rate_at_k(retrieved_t, subset_t, TOP_K))
+    scores["MRR (role=target)"].append(mrr(retrieved_t, subset_t, TOP_K))
+
+    subset_c, retrieved_c = _retrieve_by_filter(index, goldens, "camp", use_rewrite)
+    scores["Hit Rate@5 (camp 전체)"].append(hit_rate_at_k(retrieved_c, subset_c, TOP_K))
+    scores["MRR (camp 전체)"].append(mrr(retrieved_c, subset_c, TOP_K))
+
+
+def _empty_filter_scores() -> dict[str, list[float]]:
+    return {
+        "Hit Rate@5 (role=target)": [],
+        "MRR (role=target)": [],
+        "Hit Rate@5 (camp 전체)": [],
+        "MRR (camp 전체)": [],
+    }
 
 
 def run_chunking_comparison(goldens: list[GoldenQuery]):
-    """3.2절: 절 인식(v1) vs naive 슬라이싱(v2) 비교.
+    """3.2절: 절 인식(v1) vs naive 슬라이싱(v2) 비교. 전체 골든셋으로, role=target·
+    camp 전체 두 필터 조합 각각 채점함(8.1절).
 
     domain_eval은 실제 운영 시 "실험 환경"/"평가" 절을 우선하는 경량 재랭킹을
     쓰므로(7.4절), 여기서 절 인식(v1)이 v2보다 뚜렷이 나아야 재랭킹의 전제가
-    성립함을 확인할 수 있음(schedule.md 3.2절 참고). 전체 골든셋으로 채점함.
+    성립함을 확인할 수 있음(schedule.md 3.2절 참고).
     """
     embedding = get_embedding_model()
     labels = ["v1_section_aware", "v2_naive"]
-    scores = {"Hit Rate@5": [], "MRR": []}
+    scores = _empty_filter_scores()
     for label, naive in zip(labels, (False, True)):
         index = _get_or_build_index(embedding, naive, HERE / "pdf" / label.split("_")[0] / "index")
-        retrieved = _retrieve_all(index, goldens, use_rewrite=False)
-        scores["Hit Rate@5"].append(hit_rate_at_k(retrieved, goldens, TOP_K))
-        scores["MRR"].append(mrr(retrieved, goldens, TOP_K))
+        _score_both_filters(index, goldens, scores)
     plot_bar_comparison(
         labels, scores, f"청킹 전략 비교 ({AGENT_NAME})", "score",
         HERE / "report_assets" / "chunking_comparison.png",
@@ -86,14 +136,14 @@ def run_chunking_comparison(goldens: list[GoldenQuery]):
 
 
 def run_embedding_comparison(goldens: list[GoldenQuery]):
-    """3.1절: 임베딩 후보 비교(v1 청킹 위에서). 전체 골든셋으로 채점함.
+    """3.1절: 임베딩 후보 비교(v1 청킹 위에서). 전체 골든셋, 필터 조합별로 채점함(8.1절).
 
     bge-m3는 청킹 비교에서 이미 v1/index로 색인해 뒀으므로 그 결과를 그대로 재사용함
     (같은 청킹+임베딩 조합을 두 번 embed하지 않기 위함 — 3개 후보 중 CPU에서 가장
     비싼 게 전체 코퍼스 재임베딩이라 여기서 1회분을 아낌).
     """
     labels = list(EMBEDDING_CANDIDATES)
-    scores = {"Hit Rate@5": [], "MRR": []}
+    scores = _empty_filter_scores()
     for name, model_id in EMBEDDING_CANDIDATES.items():
         if name == "bge-m3":
             embedding = get_embedding_model()
@@ -102,9 +152,7 @@ def run_embedding_comparison(goldens: list[GoldenQuery]):
             embedding = get_embedding_model_by_name(model_id)
             index_dir = HERE / "pdf" / "v1" / f"index_{name}"
         index = _get_or_build_index(embedding, naive=False, index_dir=index_dir)
-        retrieved = _retrieve_all(index, goldens, use_rewrite=False)
-        scores["Hit Rate@5"].append(hit_rate_at_k(retrieved, goldens, TOP_K))
-        scores["MRR"].append(mrr(retrieved, goldens, TOP_K))
+        _score_both_filters(index, goldens, scores)
     plot_bar_comparison(
         labels, scores, f"임베딩 모델 비교 ({AGENT_NAME})", "score",
         HERE / "report_assets" / "embedding_comparison.png",
@@ -113,7 +161,8 @@ def run_embedding_comparison(goldens: list[GoldenQuery]):
 
 
 def run_query_rewriting_comparison(goldens: list[GoldenQuery]):
-    """3.3절: Query Rewriting 적용 전/후 비교(v1 청킹, bge-m3 위에서).
+    """3.3절: Query Rewriting 적용 전/후 비교(v1 청킹, bge-m3 위에서), 필터 조합별로
+    채점함(8.1절).
 
     이 에이전트 관점(perspective=domain)의 골든 질의만 씀 — 리라이팅 효과는
     질의 유형에 따라 달라질 수 있어, 청킹/임베딩과 달리 에이전트별로 나눠 봄.
@@ -121,11 +170,9 @@ def run_query_rewriting_comparison(goldens: list[GoldenQuery]):
     embedding = get_embedding_model()
     index = _get_or_build_index(embedding, naive=False, index_dir=HERE / "pdf" / "v1" / "index")
     labels = ["원본 질의", "리라이팅 질의"]
-    scores = {"Hit Rate@5": [], "MRR": []}
+    scores = _empty_filter_scores()
     for use_rewrite in (False, True):
-        retrieved = _retrieve_all(index, goldens, use_rewrite=use_rewrite)
-        scores["Hit Rate@5"].append(hit_rate_at_k(retrieved, goldens, TOP_K))
-        scores["MRR"].append(mrr(retrieved, goldens, TOP_K))
+        _score_both_filters(index, goldens, scores, use_rewrite=use_rewrite)
     plot_bar_comparison(
         labels, scores, f"Query Rewriting 비교 ({AGENT_NAME})", "score",
         HERE / "report_assets" / "query_rewriting_comparison.png",
@@ -147,8 +194,14 @@ def build_report(chunk, emb, qr) -> str:
     chunk_labels, chunk_scores = chunk
     emb_labels, emb_scores = emb
     qr_labels, qr_scores = qr
-    best_hit = max(chunk_scores["Hit Rate@5"] + emb_scores["Hit Rate@5"])
-    best_mrr = max(chunk_scores["MRR"] + emb_scores["MRR"])
+    best_hit = max(
+        chunk_scores["Hit Rate@5 (role=target)"] + chunk_scores["Hit Rate@5 (camp 전체)"]
+        + emb_scores["Hit Rate@5 (role=target)"] + emb_scores["Hit Rate@5 (camp 전체)"]
+    )
+    best_mrr = max(
+        chunk_scores["MRR (role=target)"] + chunk_scores["MRR (camp 전체)"]
+        + emb_scores["MRR (role=target)"] + emb_scores["MRR (camp 전체)"]
+    )
     verdict = (
         f"목표 임계값(Hit Rate@5 ≥ {THRESHOLD_HIT_RATE}, MRR ≥ {THRESHOLD_MRR})을 만족함."
         if best_hit >= THRESHOLD_HIT_RATE and best_mrr >= THRESHOLD_MRR
@@ -160,6 +213,11 @@ def build_report(chunk, emb, qr) -> str:
 설계 근거: docs/agentic-rag-design.md 7.4절 / docs/schedule.md 3.1~3.3절
 (에이전트 코딩 멀티턴 서빙 도입 조건의 근거인 "실험 환경, 요구 하드웨어"를
 얼마나 잘 찾아오는지를 검증함)
+
+모든 표는 두 필터 조합을 각각 채점함(8.1절 "paper_search가 실제로 쓰는 필터
+조합 각각에 대해 별도로 측정"): `role=target`은 기술 개요·판단 질의가 쓰는
+좁은 필터(대상 기술 2편만), `camp 전체`는 "같은 진영 다른 방식과의 차이" 질의가
+쓰는 넓은 필터(해당 진영 3편 모두)임.
 
 ## 1. 청킹 전략 비교 (3.2절 — 절 인식 vs naive 슬라이싱, 전체 30개 골든셋)
 
