@@ -1,0 +1,417 @@
+{
+  "queries": [
+    {
+      "id": 1,
+      "query_ko": "TurboQuant의 목적과 초록에서 주장하는 핵심 기여는 무엇인가? 특히 'near-optimal distortion rates'와 온라인(data-oblivious) 특성에 대한 설명을 찾아라.",
+      "tech": "TurboQuant",
+      "camp": "SW",
+      "role": "target",
+      "perspective": "general",
+      "expected_page": 1,
+      "expected_keywords": [
+        "near-optimal",
+        "data-oblivious",
+        "distortion rates"
+      ]
+    },
+    {
+      "id": 2,
+      "query_ko": "논문에서 GPU 같은 하드웨어 가속기에서 성능 저하의 원인으로 지적한 알고리즘적 특징은 무엇인가? 'lack of vectorization' 관련 진술을 찾아라.",
+      "tech": "TurboQuant",
+      "camp": "SW",
+      "role": "target",
+      "perspective": "trl",
+      "expected_page": 5,
+      "expected_keywords": [
+        "lack of vectorization",
+        "GPU"
+      ]
+    },
+    {
+      "id": 3,
+      "query_ko": "식(3)과 그 전후 설명에서 zi(및 평균화된 샘플)의 분산이 d에 대해 어떻게 스케일하는지(즉 분산이 1/d 또는 다른 형태로 감소하는지)를 보여주는 수식을 찾아라.",
+      "tech": "TurboQuant",
+      "camp": "SW",
+      "role": "target",
+      "perspective": "domain",
+      "expected_page": 9,
+      "expected_keywords": [
+        "variance",
+        "1/d"
+      ]
+    },
+    {
+      "id": 4,
+      "query_ko": "Theorem 2(Quantprod)의 보장을 요약하라: 기대 inner-product, inner-product distortion Dprod에 대한 상한식(특히 d와 b에 대한 스케일링)과 b=1,2,3,4일 때 근사 Dprod 값들을 찾아라.",
+      "tech": "TurboQuant",
+      "camp": "SW",
+      "role": "target",
+      "perspective": "general",
+      "expected_page": 13,
+      "expected_keywords": [
+        "Expected inner-product",
+        "Dprod",
+        "1/4^b"
+      ]
+    },
+    {
+      "id": 5,
+      "query_ko": "Figure 5의 실험 비교 설정을 확인하라: 어떤 데이터셋(예: GloVe, OpenAI3)과 embedding 차원(d 값들), 비교 대상 방법들(PQ, RabitQ 등), 그리고 사용된 비트수(예: 2 bits, 4 bits)는 무엇인가?",
+      "tech": "TurboQuant",
+      "camp": "SW",
+      "role": "target",
+      "perspective": "domain",
+      "expected_page": 21,
+      "expected_keywords": [
+        "GloVe",
+        "OpenAI3",
+        "Recall@1@k"
+      ]
+    },
+    {
+      "id": 6,
+      "query_ko": "논문은 ITME가 SSD 기반 용량을 'direct-access memory expansion'으로 변환해 공유 컨텍스트 계층(T3.5)을 실현한다고 주장하는가?",
+      "tech": "ITME",
+      "camp": "HW",
+      "role": "target",
+      "perspective": "general",
+      "expected_page": 3,
+      "expected_keywords": [
+        "T3.5",
+        "direct-access",
+        "SSD"
+      ]
+    },
+    {
+      "id": 7,
+      "query_ko": "Figure 2(및 관련 설명)는 모델 가중치와 장기 컨텍스트(KV) 캐시의 접근 동작과 어떤 레이어별 프리페칭(prefetching) 기회를 보여주는가?",
+      "tech": "ITME",
+      "camp": "HW",
+      "role": "target",
+      "perspective": "general",
+      "expected_page": 3,
+      "expected_keywords": [
+        "layer-wise prefetching",
+        "KV cache"
+      ]
+    },
+    {
+      "id": 8,
+      "query_ko": "논문은 DRAM 캐시를 64 GB로 확장할 때 SRAM 요구량이 얼마나 증가한다고 보고하며, 그 이유로 32 GB를 기준으로 선택했다고 명시하는가?",
+      "tech": "ITME",
+      "camp": "HW",
+      "role": "target",
+      "perspective": "domain",
+      "expected_page": 5,
+      "expected_keywords": [
+        "64 GB",
+        "SRAM footprint",
+        "32 GB baseline"
+      ]
+    },
+    {
+      "id": 9,
+      "query_ko": "ITME는 어떤 소프트웨어/실험 환경에서 구현·평가되었는가(예: vLLM 기반) 및 Recomp./All-caching 설정과 메모리 사용 비교는 어떻게 보고되는가?",
+      "tech": "ITME",
+      "camp": "HW",
+      "role": "target",
+      "perspective": "trl",
+      "expected_page": 9,
+      "expected_keywords": [
+        "vLLM",
+        "Recomp.",
+        "All-caching"
+      ]
+    },
+    {
+      "id": 10,
+      "query_ko": "논문은 FPGA 기반 ITME 프로토타입을 제시하는가? FPGA 프로토타입과 CMM 기반 평가 간의 읽기/쓰기 대역폭 비교 및 읽기 우선 스케줄링 관련 결과를 보고하는가?",
+      "tech": "ITME",
+      "camp": "HW",
+      "role": "target",
+      "perspective": "trl",
+      "expected_page": 11,
+      "expected_keywords": [
+        "FPGA",
+        "bandwidth",
+        "read-priority"
+      ]
+    },
+    {
+      "id": 11,
+      "query_ko": "DeepSeek-V2의 전체 파라미터 수, 토큰당 활성화되는 파라미터 수와 지원되는 컨텍스트 길이는 각각 얼마인가?",
+      "tech": "DeepSeek-V2",
+      "camp": "SW",
+      "role": "comparison",
+      "perspective": "general",
+      "expected_page": 1,
+      "expected_keywords": [
+        "236B",
+        "21B",
+        "128K"
+      ]
+    },
+    {
+      "id": 12,
+      "query_ko": "Table 1에서 능력이 'Weak'로 분류된 어텐션 메커니즘은 무엇인가?",
+      "tech": "DeepSeek-V2",
+      "camp": "SW",
+      "role": "comparison",
+      "perspective": "general",
+      "expected_page": 9,
+      "expected_keywords": [
+        "MQA",
+        "Weak"
+      ]
+    },
+    {
+      "id": 13,
+      "query_ko": "사람 선호에 맞추기 위한 강화학습에 논문에서 사용한 알고리즘 이름은 무엇이며, 선택 이유(비용 절감 관련)는 무엇인가?",
+      "tech": "DeepSeek-V2",
+      "camp": "SW",
+      "role": "comparison",
+      "perspective": "trl",
+      "expected_page": 17,
+      "expected_keywords": [
+        "GRPO",
+        "critic"
+      ]
+    },
+    {
+      "id": 14,
+      "query_ko": "참고문헌에서 'trillion parameter' 모델 훈련을 위한 메모리 최적화 논문으로 언급된 작업의 이름은 무엇인가?",
+      "tech": "DeepSeek-V2",
+      "camp": "SW",
+      "role": "comparison",
+      "perspective": "domain",
+      "expected_page": 25,
+      "expected_keywords": [
+        "Zero",
+        "memory optimizations"
+      ]
+    },
+    {
+      "id": 15,
+      "query_ko": "MMLU Humanity-Moral 서브셋에 대한 세 명의 주석가 간 일치도는 어떠했으며, 논문이 이로부터 내린 결론은 무엇인가?",
+      "tech": "DeepSeek-V2",
+      "camp": "SW",
+      "role": "comparison",
+      "perspective": "trl",
+      "expected_page": 33,
+      "expected_keywords": [
+        "low agreement",
+        "contentious"
+      ]
+    },
+    {
+      "id": 16,
+      "query_ko": "KIVI가 해결하려는 주요 문제와 제안한 방법(특히 'tuning-free asymmetric 2bit quantization'의 핵심 아이디어)은 무엇인가요?",
+      "tech": "KIVI",
+      "camp": "SW",
+      "role": "comparison",
+      "perspective": "general",
+      "expected_page": 1,
+      "expected_keywords": [
+        "KV cache",
+        "quantization",
+        "2-bit"
+      ]
+    },
+    {
+      "id": 17,
+      "query_ko": "KIVI의 성능 검증 근거는 무엇인가요? LongBench나 논문 내 표(예: Table 4)를 통해 실험 결과가 어떻게 제시되었나요?",
+      "tech": "KIVI",
+      "camp": "SW",
+      "role": "comparison",
+      "perspective": "trl",
+      "expected_page": 9,
+      "expected_keywords": [
+        "LongBench",
+        "Table 4",
+        "KIVI-2"
+      ]
+    },
+    {
+      "id": 18,
+      "query_ko": "논문에서 제시한 KIVI 알고리즘의 전체 파이프라인은 어떻게 구성되나요? (예: Figure 3의 Q_MatMul, Prefill/Decoding 단계와 채널/토큰별 양자화 흐름)",
+      "tech": "KIVI",
+      "camp": "SW",
+      "role": "comparison",
+      "perspective": "domain",
+      "expected_page": 5,
+      "expected_keywords": [
+        "Figure 3",
+        "Q_MatMul",
+        "prefill"
+      ]
+    },
+    {
+      "id": 19,
+      "query_ko": "논문에 제시된 메모리·속도 분석 예시(예: OPT-175B, batch size 512, prompt 512 등)에서 KV 캐시가 차지하는 용량 수치는 얼마이며 어떻게 비교되나요?",
+      "tech": "KIVI",
+      "camp": "SW",
+      "role": "comparison",
+      "perspective": "general",
+      "expected_page": 3,
+      "expected_keywords": [
+        "OPT-175B",
+        "1.2TB",
+        "KV cache"
+      ]
+    },
+    {
+      "id": 20,
+      "query_ko": "저자들이 언급한 'attention sparsity'가 어떻게 토큰별 양자화가 채널별 양자화보다 더 작게 만드는지(OB2 현상에 대한 직관적 설명)는 무엇인가요?",
+      "tech": "KIVI",
+      "camp": "SW",
+      "role": "comparison",
+      "perspective": "general",
+      "expected_page": 5,
+      "expected_keywords": [
+        "attention sparsity",
+        "per-channel",
+        "OB2"
+      ]
+    },
+    {
+      "id": 21,
+      "query_ko": "InfiniGen의 핵심 아이디어는 무엇인가? 특히 긴 텍스트 생성에서 KV 캐시 관리를 어떻게 하며 오프로딩 기반 추론 시스템과는 어떻게 연계되는지 확인",
+      "tech": "InfiniGen",
+      "camp": "HW",
+      "role": "comparison",
+      "perspective": "general",
+      "expected_page": 1,
+      "expected_keywords": [
+        "KV cache",
+        "offloading",
+        "long-text"
+      ]
+    },
+    {
+      "id": 22,
+      "query_ko": "논문에서 비교한 Transformer 블록 실행 스타일들(Full GPU, KV cache on CPU, Prefetch KV cache, Prefetch critical KV) 간의 차이와 각 실행 흐름(Load Cache / Attention / FFN)의 타이밍 비교는 어디에 나오는가?",
+      "tech": "InfiniGen",
+      "camp": "HW",
+      "role": "comparison",
+      "perspective": "domain",
+      "expected_page": 4,
+      "expected_keywords": [
+        "Prefetch",
+        "KV cache",
+        "Transformer block"
+      ]
+    },
+    {
+      "id": 23,
+      "query_ko": "InfiniGen을 다른 기법들(예: Full Cache, Quantization, H2O 등)과 성능 비교한 결과는 어떤 모델·벤치마크에서 제시되며 어떤 비교 대상들이 포함되어 있는지 확인",
+      "tech": "InfiniGen",
+      "camp": "HW",
+      "role": "comparison",
+      "perspective": "general",
+      "expected_page": 10,
+      "expected_keywords": [
+        "Full Cache",
+        "H2O",
+        "InfiniGen"
+      ]
+    },
+    {
+      "id": 24,
+      "query_ko": "실험적 근거(TRL)를 확인하려면 OPT-13B, 시퀀스 길이 2048 배치 8에서 Transformer 블록의 지연 시간 분해(latency breakdown)와 데이터 전송이 차지하는 비중은 어디에 제시되어 있는가?",
+      "tech": "InfiniGen",
+      "camp": "HW",
+      "role": "comparison",
+      "perspective": "trl",
+      "expected_page": 13,
+      "expected_keywords": [
+        "latency breakdown",
+        "OPT-13B",
+        "Data Transfer"
+      ]
+    },
+    {
+      "id": 25,
+      "query_ko": "논문에서 Transformer 블록 간 입력 유사성 시각화와 쿼리 행렬(예: OPT-13B의 Layer 18)에서 관찰된 채널/열 패턴은 어디에 설명되어 있는가?",
+      "tech": "InfiniGen",
+      "camp": "HW",
+      "role": "comparison",
+      "perspective": "general",
+      "expected_page": 7,
+      "expected_keywords": [
+        "input similarity",
+        "query matrix",
+        "Layer 18"
+      ]
+    },
+    {
+      "id": 26,
+      "query_ko": "논문 요약: 이 논문이 CXL 기반 KV-cache 관리로 1M-토큰 LLM 추론 확장 문제를 다루는가?",
+      "tech": "PIM/CXL",
+      "camp": "HW",
+      "role": "comparison",
+      "perspective": "general",
+      "expected_page": 1,
+      "expected_keywords": [
+        "CXL",
+        "KV-cache",
+        "1M-token"
+      ]
+    },
+    {
+      "id": 27,
+      "query_ko": "서버 수준 평가 포함 여부: In-server PNM과 KV-cache 오프로드의 처리량 및 에너지 비교 실험을 제시하는가?",
+      "tech": "PIM/CXL",
+      "camp": "HW",
+      "role": "comparison",
+      "perspective": "trl",
+      "expected_page": 9,
+      "expected_keywords": [
+        "throughput",
+        "energy",
+        "In-server PNM"
+      ]
+    },
+    {
+      "id": 28,
+      "query_ko": "하드웨어/구성 확인: VPU(벡터 처리 유닛)의 아키텍처와 설정(예: Configurable Array/Tree)이 설명되어 있으며 CXL-PNM 컨트롤러가 LPDDR5X와 AXI4 기반 중재로 메모리 접근을 조율하는가?",
+      "tech": "PIM/CXL",
+      "camp": "HW",
+      "role": "comparison",
+      "perspective": "domain",
+      "expected_page": 5,
+      "expected_keywords": [
+        "VPU",
+        "CXL-PNM",
+        "LPDDR5X"
+      ]
+    },
+    {
+      "id": 29,
+      "query_ko": "KV-cache 관리 방법 분류: 논문이 eviction(영구 삭제) 방식과 dynamic selection 방식을 구분하고 StreamingLLM, H2O, InfiniPot 등 관련 작업을 언급하는가?",
+      "tech": "PIM/CXL",
+      "camp": "HW",
+      "role": "comparison",
+      "perspective": "general",
+      "expected_page": 11,
+      "expected_keywords": [
+        "eviction",
+        "dynamic selection",
+        "StreamingLLM"
+      ]
+    },
+    {
+      "id": 30,
+      "query_ko": "Steady Selection 실험 결과 확인: PNM 장치 수 증가 시 recall 수가 급감하고 GPU 이용률이 개선된다는 결과를 제시하는가?",
+      "tech": "PIM/CXL",
+      "camp": "HW",
+      "role": "comparison",
+      "perspective": "trl",
+      "expected_page": 7,
+      "expected_keywords": [
+        "Steady Selection",
+        "recalls",
+        "GPU utilization"
+      ]
+    }
+  ]
+}

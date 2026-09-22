@@ -1,0 +1,17 @@
+{
+  "domain": "에이전트형 AI 코딩 서비스의 멀티턴 장문맥 서빙",
+  "techs": [
+    {
+      "name": "TurboQuant",
+      "camp": "SW",
+      "role": "target",
+      "search_anchor": "Google"
+    },
+    {
+      "name": "ITME",
+      "camp": "HW",
+      "role": "target",
+      "search_anchor": "SK hynix"
+    }
+  ]
+}

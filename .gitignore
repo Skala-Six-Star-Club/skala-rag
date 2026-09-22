@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Doc Pool source PDFs (copyrighted arXiv papers, fetched locally per README)
+data/doc_pool/*.pdf
+
+# Embedding DB / FAISS indexes (rebuildable, per-teammate versioned)
+scripts/*/pdf/v*/index/
+scripts/*/pdf/v*/*.faiss
+scripts/*/pdf/v*/*.pkl
+
+# Test results / generated reports & charts
+scripts/*/*_report.md
+scripts/*/report_assets/
+eval/results/
+
+# Final assembled report (report agent output)
+output/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
