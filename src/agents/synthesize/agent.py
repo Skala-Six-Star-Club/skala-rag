@@ -25,9 +25,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from src.common.models import get_generation_llm
 from src.common.base_agent import BaseAgent
-from src.common.state import AgentState, Synthesis
+from src.common.state import AgentState, Conflict, Synthesis
 
 _PROMPT_TEMPLATE = """\
 아래는 TurboQuant(SW)와 ITME(HW) 두 기술에 대한 4개 관점(기술 성숙도, 시장성,
@@ -48,6 +50,19 @@ _PROMPT_TEMPLATE = """\
 무관함. 특정 관점의 신뢰도가 낮으면 그 관점의 결론은 잠정적임을 서술에 반영하되,
 두 기술을 비교해 우열을 매기는 데는 쓰지 말 것.
 """
+
+
+class _SynthesisNarrative(BaseModel):
+    """LLM 구조화 출력 전용 스키마. Synthesis에서 서술 부분(agreements/conflicts/
+    summary)만 떼어 씀 — perspective_confidence(dict[str, dict[str, float]])처럼
+    키가 동적으로 정해지는 필드는 OpenAI Structured Outputs가 지원하지 않아
+    (모든 필드가 고정된 properties/required를 가져야 함), 그 필드들은 LLM에게
+    아예 요청하지 않고 코드가 별도로 계산해 Synthesis에 채워 넣음(아래 run()).
+    """
+
+    agreements: list[str] = Field(default_factory=list)
+    conflicts: list[Conflict] = Field(default_factory=list)
+    summary: str = ""
 
 
 def _aggregate_confidence(
@@ -96,13 +111,19 @@ class SynthesizeAgent(BaseAgent):
 
         # TODO(담당자): 프롬프트 문구를 다듬을 것(예: 관점 결과를 dict 그대로
         # 넣지 말고 사람이 읽기 좋은 형태로 직렬화). 구조화 출력 호출 자체는 동작함.
-        llm = get_generation_llm().with_structured_output(Synthesis)
-        synthesis: Synthesis = llm.invoke(prompt)  # type: ignore[assignment]
+        llm = get_generation_llm().with_structured_output(_SynthesisNarrative)
+        narrative: _SynthesisNarrative = llm.invoke(prompt)  # type: ignore[assignment]
 
-        # LLM이 만든 구조화 출력 위에, 신뢰도 집계는 코드가 결정론적으로 덮어씀
-        # (재현성 확보 — LLM이 수치를 다시 쓰게 두면 값이 흔들릴 수 있음).
-        synthesis.perspective_confidence = confidence
-        synthesis.overall_confidence = overall_confidence
-        synthesis.weakest_perspective = weakest_perspective
+        # 신뢰도 집계는 LLM에게 요청하지 않고 코드가 결정론적으로 채움(재현성
+        # 확보 + perspective_confidence의 동적 dict 스키마는 애초에 OpenAI
+        # Structured Outputs로 못 보냄, 위 _SynthesisNarrative 독스트링 참고).
+        synthesis = Synthesis(
+            agreements=narrative.agreements,
+            conflicts=narrative.conflicts,
+            summary=narrative.summary,
+            perspective_confidence=confidence,
+            overall_confidence=overall_confidence,
+            weakest_perspective=weakest_perspective,
+        )
 
         return {"synthesis": synthesis}
