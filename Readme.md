@@ -6,7 +6,15 @@ SW(TurboQuant)와 HW(ITME) 두 KV cache 최적화 기술을, 기술 성숙도·�
 [docs/schedule.md](docs/schedule.md) 참고.
 
 이 저장소의 현재 단계는 **설계서의 10개 에이전트 전부를 팀원이 병렬로 완성할 수
-있는 공통 구조**를 갖추는 것임. RAG를 실제로 쓰는 3개(`tech_research`, `trl_eval`,
+있는 공통 구조**를 갖추는 것임.
+
+> **검색 설정 채택안 (2026-09-22 비교실험, `scripts/{rag 3종}/*_report.md`)**
+> 절 인식 청킹(800자/overlap 120) + `Qwen/Qwen3-Embedding-0.6B` + Query Rewriting 끔.
+> 설계서 6.1절의 bge-m3와 7.2~7.4절의 리라이팅은 실측(Hit Rate@5, MRR)에서 각각
+> Qwen3-Embedding에 뒤지고 원본 질의와 같거나 낮아 교체·비활성화함. 리라이팅은
+> `.env`의 `QUERY_REWRITING=1`로 다시 켤 수 있음. RAG 3종(`tech_research`, `trl_eval`,
+> `domain_eval`)은 이 설정으로 구현이 끝나 있으며 `python -m scripts.run_rag_agents`로
+> 실제 순서대로 돌려 볼 수 있음(`output/rag_agents_smoke.md`). RAG를 실제로 쓰는 3개(`tech_research`, `trl_eval`,
 `domain_eval`, 4·5장)와 RAG를 쓰지 않는 7개(`select_tech`, `market_eval`,
 `stakeholder_eval`, `evidence_check`, `synthesize`, `judge`, `report`)가 각각
 `src/agents/{agent}/`, `scripts/{agent}/`에 대응함. 전체를 하나로 잇는
@@ -84,11 +92,12 @@ RAG 여부에 따라 `test_runner.py`가 검증하는 방식이 다르고, **"�
 |---|---|
 | `src/common/state.py` | `AgentState`(TypedDict) + `TechSpec`/`TechProfile`/`Evidence`/`Reference`/`ViewResult`/`Synthesis`/`JudgeFeedback`. 11장 표의 필드명·타입·갱신 방식(덮어쓰기/누적)을 그대로 구현함 |
 | `src/common/models.py` | `get_generation_llm()`(GPT-5 mini), `get_judge_llm()`(Qwen3-8B, Ollama), `get_embedding_model()`(bge-m3). 3.1절 비교실험용 `get_embedding_model_by_name()` 포함 |
-| `src/common/tools.py` | PDF 로딩(PyMuPDF) → 절 구조 인식(정규식) → 절 경계 내 청킹 → FAISS 색인(`build_doc_pool_index`), 비교용 naive 청킹(`build_doc_pool_index_naive`), `paper_search`, `web_search`(Tavily), `summarize_sources` |
+| `src/common/tools.py` | PDF 로딩(PyMuPDF) → 절 구조 인식(정규식) → 절 경계 내 청킹 → FAISS 색인(`build_doc_pool_index`), 비교용 naive 청킹(`build_doc_pool_index_naive`), 에이전트 공유 색인 로더(`get_shared_index`, `data/index/<임베딩>/`), `paper_search`(role/camp/tech 사전 필터, 전체 벡터 대상), `web_search`(Tavily, 키 없으면 DuckDuckGo), `summarize_sources`, 관점 결과 구조화 추출(`extract_view_result`) |
 | `src/common/base_agent.py` | `BaseAgent.run(state) -> dict` 하나만 구현하면 되는 노드 인터페이스. 모듈 함수 `rewrite_query()`(Pre-retrieval Query Rewriting, 7.2~7.4 공통)도 여기 있음 |
 | `src/common/doc_pool.py` | Doc Pool 6편의 파일명·기술명·진영·역할·arXiv ID (5장 표) |
 | `src/common/eval_utils.py` | `hit_rate_at_k`/`mrr`/`plot_bar_comparison`(RAG 3종), `score_with_rubric`/`plot_rubric_scores`(8.2 루브릭), `UnitCheck`/`plot_unit_checks`(단위 테스트) — 10개 `test_runner.py`가 공유하는 지표·그래프 유틸 |
-| `src/agents/{agent}/agent.py` | 실제 노드 구현. State 입출력 키는 고정돼 있고, `TODO` 표시된 LLM 구조화 추출/프롬프트 로직만 담당자가 채우면 됨(`select_tech`/`evidence_check`는 이미 완성돼 있음 — 규칙 기반이라 판단할 여지가 없음) |
+| `src/agents/{agent}/agent.py` | 실제 노드 구현. State 입출력 키는 고정돼 있음. RAG 3종(`tech_research`/`trl_eval`/`domain_eval`)과 `market_eval`/`stakeholder_eval`은 구조화 추출까지 구현됨. `select_tech`/`evidence_check`는 규칙 기반으로 완성돼 있음 |
+| `scripts/run_rag_agents.py` | RAG 3종 스모크 실행(select_tech → tech_research → trl_eval, domain_eval). `--retry`로 재검색 패스까지 확인. 결과는 `output/rag_agents_smoke.md` |
 | `configs/tech_selection.json` | `select_tech`가 읽는 기술 선정 결과(3장: TurboQuant/ITME, Human 기반 결정) |
 | `eval/generate_golden_dataset.py` | Doc Pool PDF를 읽어 LLM으로 한국어 검색 질의 약 30개(문서당 5개)를 합성하고 정답 쪽 번호·키워드를 붙여 `golden_dataset.json`에 저장 |
 | `scripts/{rag 3종}/index_config.py` | 그 에이전트의 임베딩 후보 목록(3.1절) |

@@ -172,6 +172,46 @@ def build_doc_pool_index(
 
 
 # ---------------------------------------------------------------------------
+# 공유 색인 (5장 "전 에이전트가 하나의 색인을 공유"): 절 인식 청킹 + 채택 임베딩
+# ---------------------------------------------------------------------------
+
+
+def _embedding_dir_name(model_name: str) -> str:
+    return model_name.replace("/", "__")
+
+
+def get_shared_index(embedding_model=None, index_dir: Path | None = None) -> FAISS:
+    """Doc Pool 6편의 공유 FAISS 색인을 로드하거나(없으면) 구축해 저장함.
+
+    - 청킹: 절 인식(v1, build_doc_pool_index). 3.2절 비교에서 naive가 수치는 높았으나
+      정답 판정이 쪽 번호 기반이라 착시 가능성이 있어 chunk_id 라벨링 전까지 유지함.
+    - 임베딩: config.EMBEDDING_MODEL(기본 Qwen3-Embedding-0.6B).
+    - 경로: data/index/<임베딩 이름>/ (임베딩을 바꾸면 자동으로 다른 폴더에 새로 구축).
+    """
+    from src.common.doc_pool import DOC_POOL_SPECS
+    from src.common.models import get_embedding_model
+
+    embedding_model = embedding_model or get_embedding_model()
+    index_dir = index_dir or (config.INDEX_DIR / _embedding_dir_name(config.EMBEDDING_MODEL))
+    if (index_dir / "index.faiss").exists():
+        return FAISS.load_local(str(index_dir), embedding_model, allow_dangerous_deserialization=True)
+    missing = [s["file"] for s in DOC_POOL_SPECS if not (config.DOC_POOL_DIR / s["file"]).exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"Doc Pool PDF 누락: {missing} — README의 표대로 {config.DOC_POOL_DIR}에 받아 둘 것"
+        )
+    index = build_doc_pool_index(config.DOC_POOL_DIR, DOC_POOL_SPECS, embedding_model)
+    index_dir.mkdir(parents=True, exist_ok=True)
+    index.save_local(str(index_dir))
+    return index
+
+
+def format_paper_source(tech: str, doc: Document) -> str:
+    """Evidence.source 표기: '<기술> p.<쪽> <절>' (13장 REFERENCE, 7.10 인용 안전장치용)."""
+    return f"{tech} p.{doc.metadata.get('page')} {doc.metadata.get('section', '')}".strip()
+
+
+# ---------------------------------------------------------------------------
 # paper_search (4장 공통 도구, 5장 검색 단계: 메타데이터 필터 -> Dense Top-K)
 # ---------------------------------------------------------------------------
 
@@ -182,14 +222,27 @@ def paper_search(
     k: int = config.DEFAULT_TOP_K,
     role: str | None = None,
     camp: str | None = None,
+    tech: str | None = None,
 ) -> list[Document]:
-    """FAISS 색인에서 메타데이터를 먼저 필터링한 뒤 Dense Top-K를 반환함."""
+    """FAISS 색인에서 메타데이터를 먼저 필터링한 뒤 Dense Top-K를 반환함.
+
+    role=target은 대상 기술 2편(TurboQuant, ITME)을 모두 통과시키므로, 한 기술의
+    자기 논문에서만 근거를 가져와야 할 때는 tech=기술명을 함께 넘길 것(7.2절
+    "기술 개요 추출은 대상 기술 자신의 논문에서만").
+    """
     filter_dict: dict[str, Any] = {}
     if role is not None:
         filter_dict["role"] = role
     if camp is not None:
         filter_dict["camp"] = camp
-    return index.similarity_search(query, k=k, filter=filter_dict or None)
+    if tech is not None:
+        filter_dict["tech"] = tech
+    # LangChain FAISS는 filter를 "fetch_k개(기본 20)를 먼저 뽑고 거르는" 방식으로 적용함.
+    # role=target+tech처럼 전체의 1/6만 통과하는 필터면 20개 안에 후보가 부족해 결과가
+    # k개 미만이거나 비게 되므로, 전체 벡터를 후보로 잡아 사실상 사전 필터가 되게 함(5장).
+    return index.similarity_search(
+        query, k=k, filter=filter_dict or None, fetch_k=index.index.ntotal
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +355,8 @@ def extract_view_result(
     perspective_label: str,
     required_items: list[str],
     valid_evidence_ids: set[int],
+    extra_instructions: str = "",
+    prior_unconfirmed: list[str] | None = None,
 ):
     """웹 검색 발췌를 9장 평가 기준의 필수 항목에 맞춰 TechViewResult로 구조화함.
 
@@ -314,8 +369,14 @@ def extract_view_result(
     if not passages:
         return TechViewResult(unconfirmed_items=list(required_items))
 
+    prior_block = (
+        "\n\n[이전 검색에서 확인되지 않은 항목 — 이번 발췌로 확인되면 confirmed/counter에 넣고, "
+        "여전히 없으면 unconfirmed_items에 유지]\n" + "\n".join(f"- {u}" for u in prior_unconfirmed)
+        if prior_unconfirmed
+        else ""
+    )
     prompt = (
-        f"아래는 '{tech}' 기술에 대한 '{perspective_label}' 관점 웹 검색 발췌임. "
+        f"아래는 '{tech}' 기술에 대한 '{perspective_label}' 관점 검색 발췌임(논문 청크와 웹 발췌). "
         "각 발췌 앞의 [근거#N]이 근거 번호임.\n\n"
         "다음 필수 항목마다 발췌에서 확인되는 사실을 한국어 한 문장으로 정리해줘:\n"
         + "\n".join(f"- {item}" for item in required_items)
@@ -323,7 +384,10 @@ def extract_view_result(
         "1. confirmed_facts에는 긍정적/중립적 사실, counter_facts에는 우려·부정적 반응·한계를 넣음\n"
         "2. 모든 문장은 실제로 그 내용이 적힌 발췌의 근거 번호를 evidence_ids에 1개 이상 넣음\n"
         "3. 발췌에 없는 내용을 지어내지 말고, 확인되지 않는 필수 항목은 unconfirmed_items에 항목명을 그대로 적음\n"
-        "4. 다른 기술과의 우열 판정 표현(더 우수함, 뒤처짐 등)은 쓰지 않음\n\n"
+        "4. 다른 기술과의 우열 판정 표현(더 우수함, 뒤처짐 등)은 쓰지 않음\n"
+        + (extra_instructions + "\n" if extra_instructions else "")
+        + prior_block
+        + "\n\n[발췌]\n"
         + "\n\n".join(passages)
     )
     llm = get_generation_llm().with_structured_output(_ExtractedView)

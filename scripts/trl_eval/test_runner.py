@@ -60,7 +60,8 @@ def _index_dir(version: str, embedding_name: str) -> Path:
     """색인 경로를 청킹 버전 x 임베딩 이름으로 고정함. 채택 임베딩을 바꿔도 이전
     모델의 색인을 덮어쓰지 않고, 같은 조합은 재사용함."""
     return HERE / "pdf" / version / f"index_{embedding_name}"
-ADOPTED_QUERY_REWRITING = "리라이팅 질의"
+# 3차 비교실험 후 기본값 off. config.QUERY_REWRITING을 따라감
+ADOPTED_QUERY_REWRITING = "리라이팅 질의" if config.QUERY_REWRITING else "원본 질의"
 # 랭킹 기준 지표. Hit Rate@5는 표본이 작으면 1.000에 자주 붙어 후보를 못 가르므로,
 # 표본이 가장 큰(30개) camp 전체 필터의 MRR을 씀(best_label 참고).
 RANKING_KEY = "MRR (camp 전체)"

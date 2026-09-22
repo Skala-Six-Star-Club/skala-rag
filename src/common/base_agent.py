@@ -11,6 +11,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from src.common import config
 from src.common.models import get_generation_llm
 from src.common.state import AgentState
 
@@ -56,6 +57,14 @@ class BaseAgent(ABC):
         raise NotImplementedError
 
     def rewrite_query(self, base_query: str, tech: str) -> str:
+        """config.QUERY_REWRITING이 꺼져 있으면 코드가 고정한 질의를 그대로 씀.
+
+        채택 임베딩(Qwen3-Embedding-0.6B)은 한국어 질의를 영어 논문 청크에 직접
+        매칭해 리라이팅 이득이 없고, LLM 출력 형식(불리언 검색식 등) 변동이 순위를
+        해치는 경우가 확인돼 기본값을 끔(3차 비교실험, 2026-09-22).
+        """
+        if not config.QUERY_REWRITING:
+            return base_query
         return rewrite_query(base_query, tech)
 
     def next_evidence_id(self, state: AgentState) -> int:

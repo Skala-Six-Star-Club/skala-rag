@@ -37,7 +37,7 @@
 | 버전 | Hit Rate@5 (role=target) | MRR (role=target) | Hit Rate@5 (camp 전체) | MRR (camp 전체) |
 |---|---|---|---|---|
 | 원본 질의 | 1.000 | 1.000 | 0.889 | 0.750 |
-| 리라이팅 질의 | 1.000 | 0.833 | 0.889 | 0.750 |
+| 리라이팅 질의 | 1.000 | 1.000 | 0.889 | 0.833 |
 
 ![Query Rewriting 비교](report_assets/query_rewriting_comparison.png)
 
@@ -45,15 +45,15 @@
 
 | id | 원본 질의 | 리라이팅 질의 |
 |---|---|---|
-| 2 | 논문에서 GPU 같은 하드웨어 가속기에서 성능 저하의 원인으로 지적한 알고리즘적 특징은 무엇인가? 'lack of vectorization' 관련 진술을 찾아라. | "TurboQuant" AND (GPU OR "hardware accelerator") AND ("performance degradation" OR "performance bottleneck" OR "reduced throughput") AND ("lack of vectorization" OR "insufficient vectorization" OR "SIMD‑unfriendly" OR "not vectorized") AND ("algorithmic characteristics" OR "algorithmic features" OR "algorithmic bottleneck") |
-| 9 | ITME는 어떤 소프트웨어/실험 환경에서 구현·평가되었는가(예: vLLM 기반) 및 Recomp./All-caching 설정과 메모리 사용 비교는 어떻게 보고되는가? | In which software/experimental environments (e.g., vLLM-based) has ITME been implemented and evaluated, and how are recomputation versus all‑caching configurations and memory usage comparisons reported? |
-| 10 | 논문은 FPGA 기반 ITME 프로토타입을 제시하는가? FPGA 프로토타입과 CMM 기반 평가 간의 읽기/쓰기 대역폭 비교 및 읽기 우선 스케줄링 관련 결과를 보고하는가? | FPGA-based ITME prototype; read/write bandwidth comparison with CMM-based evaluation; read-priority scheduling results |
-| 13 | 사람 선호에 맞추기 위한 강화학습에 논문에서 사용한 알고리즘 이름은 무엇이며, 선택 이유(비용 절감 관련)는 무엇인가? | In DeepSeek‑V2, which reinforcement learning algorithm did the authors use for human-preference alignment, and what justification did they provide for its selection, particularly with respect to cost reduction? |
-| 15 | MMLU Humanity-Moral 서브셋에 대한 세 명의 주석가 간 일치도는 어떠했으며, 논문이 이로부터 내린 결론은 무엇인가? | In the DeepSeek-V2 paper, what was the three-way inter-annotator agreement on the MMLU "Humanity–Moral" subset, and what conclusions did the authors draw from it? |
-| 17 | KIVI의 성능 검증 근거는 무엇인가요? LongBench나 논문 내 표(예: Table 4)를 통해 실험 결과가 어떻게 제시되었나요? | What empirical evidence supports KIVI's performance, and how are the experimental results reported (e.g., via LongBench evaluations or in paper tables such as Table 4)? |
-| 24 | 실험적 근거(TRL)를 확인하려면 OPT-13B, 시퀀스 길이 2048 배치 8에서 Transformer 블록의 지연 시간 분해(latency breakdown)와 데이터 전송이 차지하는 비중은 어디에 제시되어 있는가? | Where is the latency breakdown of Transformer blocks and the contribution of data transfers for OPT-13B (sequence length 2048, batch size 8) reported to assess experimental validation (Technology Readiness Level, TRL)? |
-| 27 | 서버 수준 평가 포함 여부: In-server PNM과 KV-cache 오프로드의 처리량 및 에너지 비교 실험을 제시하는가? | Server-level evaluation: comparison of throughput and energy consumption between in-server PNM and KV-cache offload |
-| 30 | Steady Selection 실험 결과 확인: PNM 장치 수 증가 시 recall 수가 급감하고 GPU 이용률이 개선된다는 결과를 제시하는가? | Steady Selection experiment: do the results report that increasing the number of PNM devices causes a sharp decrease in recall while improving GPU utilization? |
+| 2 | 논문에서 GPU 같은 하드웨어 가속기에서 성능 저하의 원인으로 지적한 알고리즘적 특징은 무엇인가? 'lack of vectorization' 관련 진술을 찾아라. | "TurboQuant" AND ("GPU" OR "hardware accelerator" OR "accelerator") AND ("performance degradation" OR "performance loss" OR "performance slowdown") AND ("algorithmic characteristics" OR "algorithmic factors" OR "algorithmic limitations") AND ("lack of vectorization" OR "non-vectorizable" OR "not vectorized" OR "insufficient vectorization") |
+| 9 | ITME는 어떤 소프트웨어/실험 환경에서 구현·평가되었는가(예: vLLM 기반) 및 Recomp./All-caching 설정과 메모리 사용 비교는 어떻게 보고되는가? | In which software/experimental environments is ITME implemented and evaluated (e.g., vLLM‑based), and how are recomputation versus all‑caching configurations and memory usage reported and compared? |
+| 10 | 논문은 FPGA 기반 ITME 프로토타입을 제시하는가? FPGA 프로토타입과 CMM 기반 평가 간의 읽기/쓰기 대역폭 비교 및 읽기 우선 스케줄링 관련 결과를 보고하는가? | Does the paper present an FPGA-based ITME prototype and provide a comparative evaluation of read/write bandwidth against a CMM-based evaluation, including results on read-priority scheduling? |
+| 13 | 사람 선호에 맞추기 위한 강화학습에 논문에서 사용한 알고리즘 이름은 무엇이며, 선택 이유(비용 절감 관련)는 무엇인가? | Which reinforcement learning algorithm was used for human-preference alignment, and what rationale—particularly with respect to cost reduction—motivated its selection? |
+| 15 | MMLU Humanity-Moral 서브셋에 대한 세 명의 주석가 간 일치도는 어떠했으며, 논문이 이로부터 내린 결론은 무엇인가? | Inter-annotator agreement (three annotators) on the MMLU Humanity–Moral subset and the conclusions drawn in DeepSeek-V2 |
+| 17 | KIVI의 성능 검증 근거는 무엇인가요? LongBench나 논문 내 표(예: Table 4)를 통해 실험 결과가 어떻게 제시되었나요? | Empirical validation of KIVI: evidence for performance and presentation of experimental results (e.g., LongBench evaluations and in-paper tables such as Table 4) |
+| 24 | 실험적 근거(TRL)를 확인하려면 OPT-13B, 시퀀스 길이 2048 배치 8에서 Transformer 블록의 지연 시간 분해(latency breakdown)와 데이터 전송이 차지하는 비중은 어디에 제시되어 있는가? | To validate the paper's TRL claims, where does InfiniGen report the latency breakdown of Transformer blocks and the fraction of runtime attributable to data transfer for OPT‑13B (sequence length = 2048, batch size = 8)? |
+| 27 | 서버 수준 평가 포함 여부: In-server PNM과 KV-cache 오프로드의 처리량 및 에너지 비교 실험을 제시하는가? | Does the paper include a server-level evaluation comparing throughput and energy of in-server PNM versus KV-cache offloading? |
+| 30 | Steady Selection 실험 결과 확인: PNM 장치 수 증가 시 recall 수가 급감하고 GPU 이용률이 개선된다는 결과를 제시하는가? | Does the "Steady Selection" experiment report that increasing the number of PNM devices causes a sharp decline in recall while improving GPU utilization? |
 
 
 ## 4. 결론
@@ -64,7 +64,7 @@
 
 - 청킹: 채택안은 v1_section_aware이지만, MRR (camp 전체) 기준 실측 최고 성능은 **v2_naive**임 — 6.1절/5장 절차대로 재검토 대상.
 - 임베딩: 채택안(qwen3-embedding-0.6b)이 MRR (camp 전체) 기준으로도 최고 성능임.
-- Query Rewriting: 채택안은 리라이팅 질의이지만, MRR (camp 전체) 기준 실측 최고 성능은 **원본 질의**임 — 6.1절/5장 절차대로 재검토 대상.
+- Query Rewriting: 채택안은 원본 질의이지만, MRR (camp 전체) 기준 실측 최고 성능은 **리라이팅 질의**임 — 6.1절/5장 절차대로 재검토 대상.
 
 trl_eval은 재검색 시 질의 초점을 "구현/공식 발표"에서 "한계·실패 사례·후속
 검증"으로 바꾸는 로직(7.3절)이 있으므로, 위 수치는 1차 패스(재검색 전) 기준임.

@@ -38,7 +38,7 @@
 | 버전 | Hit Rate@5 (role=target) | MRR (role=target) | Hit Rate@5 (camp 전체) | MRR (camp 전체) |
 |---|---|---|---|---|
 | 원본 질의 | 1.000 | 1.000 | 0.857 | 0.857 |
-| 리라이팅 질의 | 1.000 | 1.000 | 0.857 | 0.857 |
+| 리라이팅 질의 | 1.000 | 0.833 | 0.857 | 0.786 |
 
 ![Query Rewriting 비교](report_assets/query_rewriting_comparison.png)
 
@@ -46,13 +46,13 @@
 
 | id | 원본 질의 | 리라이팅 질의 |
 |---|---|---|
-| 3 | 식(3)과 그 전후 설명에서 zi(및 평균화된 샘플)의 분산이 d에 대해 어떻게 스케일하는지(즉 분산이 1/d 또는 다른 형태로 감소하는지)를 보여주는 수식을 찾아라. | In the TurboQuant paper, locate Eq. (3) and the surrounding discussion that show how Var(z_i) (and the variance of the sample mean) scales with d — e.g., whether it decreases as 1/d or follows a different dependence. |
-| 5 | Figure 5의 실험 비교 설정을 확인하라: 어떤 데이터셋(예: GloVe, OpenAI3)과 embedding 차원(d 값들), 비교 대상 방법들(PQ, RabitQ 등), 그리고 사용된 비트수(예: 2 bits, 4 bits)는 무엇인가? | Figure 5 experimental setup: which datasets (e.g., GloVe, OpenAI-3), embedding dimensionalities (d values), compared methods (PQ, RabitQ, etc.), and quantization bit-widths (e.g., 2‑bit, 4‑bit)? |
-| 8 | 논문은 DRAM 캐시를 64 GB로 확장할 때 SRAM 요구량이 얼마나 증가한다고 보고하며, 그 이유로 32 GB를 기준으로 선택했다고 명시하는가? | Does the paper quantify the increase in SRAM requirements when scaling the DRAM cache to 64 GB and explicitly justify the choice of 32 GB as the baseline? |
-| 14 | 참고문헌에서 'trillion parameter' 모델 훈련을 위한 메모리 최적화 논문으로 언급된 작업의 이름은 무엇인가? | Which referenced work is cited as a memory-optimization method for training trillion-parameter models? |
-| 18 | 논문에서 제시한 KIVI 알고리즘의 전체 파이프라인은 어떻게 구성되나요? (예: Figure 3의 Q_MatMul, Prefill/Decoding 단계와 채널/토큰별 양자화 흐름) | Full pipeline of the KIVI algorithm: structure and dataflow (Fig. 3 — Q_MatMul; prefill vs. decoding stages; channel-wise and token-wise quantization flow) |
-| 22 | 논문에서 비교한 Transformer 블록 실행 스타일들(Full GPU, KV cache on CPU, Prefetch KV cache, Prefetch critical KV) 간의 차이와 각 실행 흐름(Load Cache / Attention / FFN)의 타이밍 비교는 어디에 나오는가? | Where in the InfiniGen paper are the differences between Transformer block execution modes (Full GPU, KV cache on CPU, Prefetch KV cache, Prefetch critical KV) and the timing breakdown of each execution stage (cache loading / attention / FFN) presented? |
-| 28 | 하드웨어/구성 확인: VPU(벡터 처리 유닛)의 아키텍처와 설정(예: Configurable Array/Tree)이 설명되어 있으며 CXL-PNM 컨트롤러가 LPDDR5X와 AXI4 기반 중재로 메모리 접근을 조율하는가? | Hardware/configuration verification: Are the VPU (vector processing unit) architecture and configuration (e.g., configurable array or tree) described, and does the CXL‑PNM controller arbitrate memory accesses to LPDDR5X via an AXI4‑based mechanism? |
+| 3 | 식(3)과 그 전후 설명에서 zi(및 평균화된 샘플)의 분산이 d에 대해 어떻게 스케일하는지(즉 분산이 1/d 또는 다른 형태로 감소하는지)를 보여주는 수식을 찾아라. | Locate an equation in or around Eq. (3) that characterizes how Var(z_i) (and the sample mean) scale with d (i.e., whether the variance decays as 1/d or follows a different dependence). |
+| 5 | Figure 5의 실험 비교 설정을 확인하라: 어떤 데이터셋(예: GloVe, OpenAI3)과 embedding 차원(d 값들), 비교 대상 방법들(PQ, RabitQ 등), 그리고 사용된 비트수(예: 2 bits, 4 bits)는 무엇인가? | In "TurboQuant" (Figure 5), what are the experimental comparison settings: which datasets (e.g., GloVe, OpenAI3), embedding dimensionalities (values of d), compared methods (PQ, RabitQ, etc.), and quantization bit‑widths (e.g., 2‑bit, 4‑bit)? |
+| 8 | 논문은 DRAM 캐시를 64 GB로 확장할 때 SRAM 요구량이 얼마나 증가한다고 보고하며, 그 이유로 32 GB를 기준으로 선택했다고 명시하는가? | Does the paper quantify the increase in SRAM requirements when scaling the DRAM cache to 64 GB and explicitly state that 32 GB was chosen as the baseline for that comparison? |
+| 14 | 참고문헌에서 'trillion parameter' 모델 훈련을 위한 메모리 최적화 논문으로 언급된 작업의 이름은 무엇인가? | Which referenced work is cited as a memory-efficient training method for trillion-parameter models? |
+| 18 | 논문에서 제시한 KIVI 알고리즘의 전체 파이프라인은 어떻게 구성되나요? (예: Figure 3의 Q_MatMul, Prefill/Decoding 단계와 채널/토큰별 양자화 흐름) | How is the end-to-end pipeline of the KIVI algorithm structured in the paper (e.g., Figure 3: Q_MatMul, prefill/decoding stages, and per-channel and per-token quantization flows)? |
+| 22 | 논문에서 비교한 Transformer 블록 실행 스타일들(Full GPU, KV cache on CPU, Prefetch KV cache, Prefetch critical KV) 간의 차이와 각 실행 흐름(Load Cache / Attention / FFN)의 타이밍 비교는 어디에 나오는가? | Where in the InfiniGen paper are the differences between Transformer block execution modes (Full GPU, KV cache on CPU, Prefetch KV cache, Prefetch critical KV) and the per-stage timing breakdowns for Load Cache, Attention, and FFN reported? |
+| 28 | 하드웨어/구성 확인: VPU(벡터 처리 유닛)의 아키텍처와 설정(예: Configurable Array/Tree)이 설명되어 있으며 CXL-PNM 컨트롤러가 LPDDR5X와 AXI4 기반 중재로 메모리 접근을 조율하는가? | Hardware/configuration verification: Are the VPU (vector processing unit) microarchitecture and configuration (e.g., configurable array/tree topology) described, and does a CXL‑PNM controller arbitrate memory access to LPDDR5X over an AXI4‑based interconnect? |
 
 
 ## 4. 결론
@@ -63,7 +63,7 @@
 
 - 청킹: 채택안은 v1_section_aware이지만, MRR (camp 전체) 기준 실측 최고 성능은 **v2_naive**임 — 6.1절/5장 절차대로 재검토 대상.
 - 임베딩: 채택안(qwen3-embedding-0.6b)이 MRR (camp 전체) 기준으로도 최고 성능임.
-- Query Rewriting: 채택안은 리라이팅 질의이지만, MRR (camp 전체) 기준 실측 최고 성능은 **원본 질의**임 — 6.1절/5장 절차대로 재검토 대상.
+- Query Rewriting: 채택안(원본 질의)이 MRR (camp 전체) 기준으로도 최고 성능임.
 
 운영 중인 domain_eval은 여기에 더해 "실험 환경"/"평가" 절 우선 재랭킹을 적용함
 (7.4절 2번 항목). 이 재랭킹은 별도 실험 없이 채택된 장치라, 위 수치와 별개로

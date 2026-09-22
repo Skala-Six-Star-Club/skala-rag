@@ -64,6 +64,13 @@ GOLDEN_DATASET_PATH = Path(
     os.getenv("GOLDEN_DATASET_PATH", "./eval/golden/golden_dataset.json")
 )
 TECH_SELECTION_CONFIG_PATH = Path("./configs/tech_selection.json")
+# 에이전트가 공유하는 Doc Pool FAISS 색인 저장 위치(임베딩 이름별 하위 폴더, gitignore)
+INDEX_DIR = Path(os.getenv("INDEX_DIR", "./data/index"))
+
+# 7.2~7.4 Pre-retrieval Query Rewriting. 2026-09-22 3차 비교실험에서 Qwen3-Embedding
+# 위에서는 리라이팅이 원본 질의보다 같거나 낮아(출력 형식 불안정 포함) 기본값을 끔.
+# 켜려면 QUERY_REWRITING=1. 테스트 러너의 3.3절 비교실험은 이 값과 무관하게 전/후를 모두 잼.
+QUERY_REWRITING = os.getenv("QUERY_REWRITING", "0") == "1"
 
 # 5장: 청킹 기본값 (RecursiveCharacterTextSplitter, 절 경계 내부 분할)
 DEFAULT_CHUNK_SIZE = 800
