@@ -36,7 +36,7 @@
 | 버전 | Hit Rate@5 (role=target) | MRR (role=target) | Hit Rate@5 (camp 전체) | MRR (camp 전체) |
 |---|---|---|---|---|
 | 원본 질의 | 1.000 | 0.833 | 0.929 | 0.845 |
-| 리라이팅 질의 | 1.000 | 0.875 | 1.000 | 0.952 |
+| 리라이팅 질의 | 1.000 | 0.875 | 1.000 | 0.964 |
 
 ![Query Rewriting 비교](report_assets/query_rewriting_comparison.png)
 
@@ -44,5 +44,13 @@
 
 목표 임계값(Hit Rate@5 ≥ 0.8, MRR ≥ 0.6)을 만족함.
 
+**채택안 vs 실측 최고 성능** (MRR (camp 전체) 기준):
+
+- 청킹: 채택안은 v1_section_aware이지만, MRR (camp 전체) 기준 실측 최고 성능은 **v2_naive**임 — 6.1절/5장 절차대로 재검토 대상.
+- 임베딩: 채택안은 bge-m3이지만, MRR (camp 전체) 기준 실측 최고 성능은 **qwen3-embedding-0.6b**임 — 6.1절/5장 절차대로 재검토 대상.
+- Query Rewriting: 채택안(리라이팅 질의)이 MRR (camp 전체) 기준으로도 최고 성능임.
+
 기존 설계(5장)는 v1_section_aware + bge-m3 + Query Rewriting 적용을 기본값으로
-채택했음. 위 수치가 그 채택을 뒷받침하지 못하면 6장·7.2절 설계를 재검토할 것.
+채택했음. 위에서 "재검토 대상"으로 표시된 항목이 있다면 6장·7.2절 설계를
+재검토할 것 — 다만 골든셋이 30개(role=target 필터는 10개)뿐이라 차이가 통계적으로
+확고한지는 표본을 늘려 다시 확인해 볼 것.
