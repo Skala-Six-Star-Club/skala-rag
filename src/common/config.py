@@ -14,9 +14,32 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_JUDGE_MODEL = os.getenv("OLLAMA_JUDGE_MODEL", "qwen3:8b")
+# OPENAI_API_KEY가 비어 있을 때 생성 LLM을 대신할 로컬 Ollama 모델(선택).
+# 비워 두면 OpenAI 키가 없을 때 그대로 에러가 남.
+OLLAMA_GENERATION_MODEL = os.getenv("OLLAMA_GENERATION_MODEL", "")
+
+
+def _detect_device() -> str:
+    """EMBEDDING_DEVICE 미설정/auto면 CUDA 가용 여부로 자동 결정함."""
+    requested = os.getenv("EMBEDDING_DEVICE", "auto").strip().lower()
+    if requested and requested != "auto":
+        return requested
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        return "cpu"
+
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
-EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
+EMBEDDING_DEVICE = _detect_device()
+# GPU에서는 배치를 키워 임베딩 처리량을 올림(CPU 기본값 32는 그대로 둠).
+EMBEDDING_BATCH_SIZE = int(
+    os.getenv("EMBEDDING_BATCH_SIZE", "64" if EMBEDDING_DEVICE.startswith("cuda") else "32")
+)
+# CUDA에서는 fp16으로 로드해 메모리와 시간을 절반 가까이 줄임.
+EMBEDDING_FP16 = os.getenv("EMBEDDING_FP16", "1") == "1" and EMBEDDING_DEVICE.startswith("cuda")
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 

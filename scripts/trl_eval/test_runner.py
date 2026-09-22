@@ -33,7 +33,11 @@ from src.common.eval_utils import (
     mrr,
     plot_bar_comparison,
 )
-from src.common.models import get_embedding_model, get_embedding_model_by_name
+from src.common.models import (
+    get_embedding_model,
+    get_embedding_model_by_name,
+    release_embedding_model,
+)
 from src.common.tools import build_doc_pool_index, build_doc_pool_index_naive, paper_search
 
 AGENT_NAME = "trl_eval"
@@ -157,6 +161,10 @@ def run_embedding_comparison(goldens: list[GoldenQuery]):
             index_dir = HERE / "pdf" / "v1" / f"index_{name}"
         index = _get_or_build_index(embedding, naive=False, index_dir=index_dir)
         _score_both_filters(index, goldens, scores)
+        if name != "bge-m3":
+            # 후보 모델은 lru_cache 대상이 아니므로 다음 후보 전에 GPU 메모리를 비움
+            del index
+            release_embedding_model(embedding)
     plot_bar_comparison(
         labels, scores, f"임베딩 모델 비교 ({AGENT_NAME})", "score",
         HERE / "report_assets" / "embedding_comparison.png",
