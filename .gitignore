@@ -18,9 +18,7 @@ scripts/*/pdf/v*/index/
 scripts/*/pdf/v*/*.faiss
 scripts/*/pdf/v*/*.pkl
 
-# Test results / generated reports & charts
-scripts/*/*_report.md
-scripts/*/report_assets/
+# Test results / generated reports & charts — 팀원과 공유하려고 추적함(gitignore 아님)
 eval/results/
 
 # Final assembled report (report agent output)
