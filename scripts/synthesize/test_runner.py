@@ -33,11 +33,21 @@ _ITME = TechViewResult(
     counter_facts=[Claim(statement="FPGA 시제품 단계로 실제 제품 검증은 아직 부족함", evidence_ids=[4])],
 )
 
+# evidence_check(7.7절 확장)가 실제로 계산해 내려보내는 perspective_confidence
+# 예시값. 여기선 market 관점 근거가 상대적으로 적었다고 가정함(0.4).
+_CONFIDENCE = {
+    "trl": {"TurboQuant": 1.0, "ITME": 0.8},
+    "market": {"TurboQuant": 0.4, "ITME": 0.4},
+    "stakeholder": {"TurboQuant": 0.8, "ITME": 1.0},
+    "domain": {"TurboQuant": 0.6, "ITME": 0.6},
+}
+
 FIXTURE_STATE = {
     "trl_result": ViewResult(by_tech={"TurboQuant": _TURBOQUANT, "ITME": _ITME}),
     "market_result": ViewResult(by_tech={"TurboQuant": _TURBOQUANT, "ITME": _ITME}),
     "stakeholder_result": ViewResult(by_tech={"TurboQuant": _TURBOQUANT, "ITME": _ITME}),
     "domain_result": ViewResult(by_tech={"TurboQuant": _TURBOQUANT, "ITME": _ITME}),
+    "perspective_confidence": _CONFIDENCE,
 }
 
 
