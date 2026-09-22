@@ -110,6 +110,19 @@ def mrr(retrieved: list[list[Document]], goldens: list[GoldenQuery], k: int) -> 
     return total / len(goldens)
 
 
+def best_label(labels: list[str], scores: dict[str, list[float]], key: str) -> str:
+    """key 지표(예: "MRR (camp 전체)") 기준으로 가장 점수가 높은 라벨을 반환함.
+
+    "임계값을 넘었는가"만으로는 여러 후보 중 실제로 뭐가 제일 나은지, 그게 채택된
+    기본값과 같은지 알 수 없어서 결론에 명시적으로 쓰려고 둠. Hit Rate@5는 표본이
+    작으면 1.000으로 자주 천장에 붙어 후보를 못 가르므로, 기본 랭킹 기준은 표본이
+    가장 큰(camp 전체, 30개) MRR로 둠 — 더 연속적이고 변별력 있는 지표.
+    """
+    values = scores[key]
+    best_idx = max(range(len(values)), key=lambda i: values[i])
+    return labels[best_idx]
+
+
 def plot_bar_comparison(
     labels: list[str],
     series: dict[str, list[float]],
