@@ -91,11 +91,21 @@ class Conflict(BaseModel):
 
 
 class Synthesis(BaseModel):
-    """7.8 synthesize 출력. 일치점, 상충점, SUMMARY."""
+    """7.8 synthesize 출력. 일치점, 상충점, SUMMARY.
+
+    확장(근거 검증 & 데이터 종합 역할, 7.7절 evidence_check가 계산한
+    perspective_confidence를 그대로 통과시키고, 여기서 관점 4종을 가로지르는
+    집계값(overall_confidence, weakest_perspective)을 코드로 계산해 얹음. 기술 간
+    우열이 아니라 "이번 조사에서 어느 관점의 근거가 상대적으로 약한지"를 나타내는
+    값이라 10장 중립성 원칙과 충돌하지 않음.
+    """
 
     agreements: list[str] = Field(default_factory=list)
     conflicts: list[Conflict] = Field(default_factory=list)
     summary: str = ""
+    perspective_confidence: dict[str, dict[str, float]] = Field(default_factory=dict)
+    overall_confidence: float = 0.0
+    weakest_perspective: str | None = None
 
 
 class JudgeFeedback(BaseModel):
@@ -124,6 +134,11 @@ class AgentState(TypedDict, total=False):
 
     retry_targets: list[str]
     retry_count: int
+
+    # 7.7절 확장(evidence_check 담당, 근거 검증 & 데이터 종합 역할): 관점별·기술별
+    # 근거 신뢰도(0~1). evidence_check가 계산해 쓰고, synthesize가 종합 시 가중치로
+    # 참고함. {perspective: {tech: score}} 형태.
+    perspective_confidence: dict[str, dict[str, float]]
 
     synthesis: Synthesis
     # 12장 "반복 2"(judge -> synthesize 재작성, 1회 한정)의 횟수. 11장 표에는 없지만
