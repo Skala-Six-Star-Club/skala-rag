@@ -25,6 +25,8 @@ GOLDEN_DATASET_PATH = Path(
     os.getenv("GOLDEN_DATASET_PATH", "./eval/golden/golden_dataset.json")
 )
 TECH_SELECTION_CONFIG_PATH = Path("./configs/tech_selection.json")
+# 12장 그래프 통합 실행용 Doc Pool FAISS 색인 저장 위치(RAG 3종이 공유, src/graph.py)
+DOC_POOL_INDEX_DIR = Path(os.getenv("DOC_POOL_INDEX_DIR", "./data/doc_pool_index"))
 
 # 5장: 청킹 기본값 (RecursiveCharacterTextSplitter, 절 경계 내부 분할)
 DEFAULT_CHUNK_SIZE = 800

@@ -126,7 +126,11 @@ class AgentState(TypedDict, total=False):
     retry_count: int
 
     synthesis: Synthesis
+    # 12장 "반복 2"(judge -> synthesize 재작성, 1회 한정)의 횟수. 11장 표에는 없지만
+    # retry_count와 같은 역할이라 추가함. synthesize가 쓰고 그래프 조건 분기가 읽음.
+    rewrite_count: int
     judge_feedback: JudgeFeedback
 
     report_md: str
     report_path: str
+    report_json_path: str
