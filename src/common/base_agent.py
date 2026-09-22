@@ -14,6 +14,17 @@ from typing import Any
 from src.common.models import get_generation_llm
 from src.common.state import AgentState
 
+# 근거 번호 대역. 노드 이름 -> (시작, 끝 미포함). 병렬 관점 노드 간 번호 충돌 방지용.
+# 재검색(12장 반복 1)으로 같은 노드가 다시 실행돼도 자기 대역 안에서 이어 붙임.
+EVIDENCE_ID_BAND_SIZE = 1000
+EVIDENCE_ID_RANGES: dict[str, tuple[int, int]] = {
+    name: (i * EVIDENCE_ID_BAND_SIZE, (i + 1) * EVIDENCE_ID_BAND_SIZE)
+    for i, name in enumerate(
+        ["tech_research", "trl_eval", "market_eval", "stakeholder_eval", "domain_eval"],
+        start=1,
+    )
+}
+
 
 def rewrite_query(base_query: str, tech: str) -> str:
     """Pre-retrieval Query Rewriting (7.2~7.4 공통). 짧은 텍스트 생성 호출 1회.
@@ -48,6 +59,23 @@ class BaseAgent(ABC):
         return rewrite_query(base_query, tech)
 
     def next_evidence_id(self, state: AgentState) -> int:
-        """evidence 리스트에 새 항목을 append할 때 쓸 다음 번호를 계산함."""
+        """evidence 리스트에 새 항목을 append할 때 쓸 다음 번호를 계산함.
+
+        12장대로 관점 노드 4개가 병렬 실행되면 네 노드가 같은 state 스냅샷을 읽어
+        전역 max+1이 동일하게 나오고, operator.add reducer로 합쳐질 때 같은 번호의
+        Evidence가 중복됨. 이를 막기 위해 노드마다 고정 번호 대역(EVIDENCE_ID_RANGES)을
+        두고 그 대역 안에서만 max+1을 계산함. 대역이 없는 노드는 전역 max+1로 동작함.
+        """
         existing = state.get("evidence", [])
-        return max((e.id for e in existing), default=0) + 1
+        band = EVIDENCE_ID_RANGES.get(self.name)
+        if band is None:
+            return max((e.id for e in existing), default=0) + 1
+        start, end = band
+        in_band = [e.id for e in existing if start <= e.id < end]
+        next_id = max(in_band, default=start - 1) + 1
+        if next_id >= end:
+            raise ValueError(
+                f"{self.name}의 근거 번호 대역 {start}~{end - 1}이 소진됨. "
+                "EVIDENCE_ID_RANGES의 EVIDENCE_ID_BAND_SIZE를 늘릴 것."
+            )
+        return next_id
