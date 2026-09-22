@@ -74,6 +74,20 @@ TurboQuant vs 담을 곳을 넓히는 ITME), ② 기술 성숙도 단계가 뚜�
 
 ### 2.2 RAG 설정 비교실험 (청킹 / 임베딩 / Query Rewriting)
 
+| 에이전트 | 책임 | 도구 | RAG | 입력 | 출력 |
+|---|---|---|---|---|---|
+| 기술 선정 `select_tech` | 선정 기술과 도메인을 설정에서 읽어 옴 | 없음 | X | 설정 파일 | `techs`, `domain` |
+| 기술 조사 `tech_research` | 논문에서 기술 개요, 적용 범위, 한계, 같은 진영 다른 방식과의 차이를 추출 | 논문 검색 | O | `techs` | `tech_profiles` |
+| 기술 성숙도 `trl_eval` | TRL 구간을 추정하고 근거와 정보 공백을 정리 | 논문 검색, 웹 검색 | O | `tech_profiles` | `trl_result` |
+| 시장 평가 `market_eval` | 시장 규모와 성장성, 채택 현황, 생태계 지지를 조사 | 웹 검색 | X | `tech_profiles`, `techs` | `market_result` |
+| 이해관계자 평가 `stakeholder_eval` | 경쟁 진영, 도입 기업과 개발자, 투자 업계의 반응을 조사 | 웹 검색 | X | `tech_profiles`, `techs` | `stakeholder_result` |
+| 도메인 평가 `domain_eval` | 에이전트 코딩 서비스의 멀티턴 장문맥 서빙에 도입할 때의 조건과 장벽을 정리 | 논문 검색, 웹 검색 | O | `tech_profiles`, `domain` | `domain_result` |
+| 근거 점검 `evidence_check` | 관점별 근거 수, 반대 근거 유무, 기술 간 균형을 점검하고 부족한 관점을 재검색 대상으로 지정 | 없음 | X | 관점 결과 4종, `evidence` | `retry_targets`, `retry_count` |
+| 평가 종합 `synthesize` | 관점 사이의 일치와 상충을 정리 | 없음 | X | 관점 결과 4종 | `synthesis` |
+| 중립성 검수 `judge` | 우열 판정 표현, 출처 없는 문장, 기술 간 서술 불균형을 검사 | 없음 | X | `synthesis`, `evidence` | `judge_feedback` |
+| 보고서 생성 `report` | 목차에 맞춰 보고서를 조립하고 PDF로 변환 | 없음 | X | State 전체 | `report_md`, `report_path` |
+
+
 RAG를 쓰는 3개 에이전트(`tech_research`/`trl_eval`/`domain_eval`)가 각자 독립
 `scripts/{agent}/test_runner.py`로 같은 3가지를 비교실험함(schedule.md 3.1~3.3절).
 청킹·임베딩은 3개 에이전트가 공유하는 전역 색인 설정이라 전체 30개 골든셋으로,
