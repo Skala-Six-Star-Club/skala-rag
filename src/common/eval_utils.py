@@ -125,27 +125,63 @@ def best_label(labels: list[str], scores: dict[str, list[float]], key: str) -> s
     return labels[best_idx]
 
 
+# 도표 공통 잉크·상태 색
+_STATUS_GOOD = "#0ca30c"
+_STATUS_BAD = "#d03b3b"
+_INK = "#1f2933"
+_INK_MUTED = "#6b7280"
+
+# 같은 지표를 여러 조건(청킹 버전, 임베딩 후보, 리라이팅 전/후, 기술)에서 비교하는 막대그래프.
+# 색은 고정 순서(파랑, 주황, 청록, 노랑)로 색각 이상 분리 검증을 통과한 조합이고, 청록·노랑은
+# 배경 대비가 낮아 값 라벨을 항상 함께 둠. 막대 사이 여백과 옅은 가로 격자만 두고 테두리는 뺌.
+_SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
+
+
+def _style_axes(ax) -> None:
+    ax.grid(axis="y", color="#e5e7eb", linewidth=0.8, zorder=0)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color("#d1d5db")
+    ax.tick_params(colors=_INK_MUTED, length=0)
+
+
 def plot_bar_comparison(
     labels: list[str],
     series: dict[str, list[float]],
     title: str,
     ylabel: str,
     save_path: Path,
+    ylim: tuple[float, float] | None = None,
 ) -> None:
-    """버전/후보별 지표 비교 막대 그래프를 PNG로 저장함."""
+    """조건(x) x 지표(막대 색) 비교. 막대마다 값 라벨, 막대 사이 여백, 고정 순서 색, 범례는 그림 위."""
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(6, 4))
-    x = range(len(labels))
-    n_series = len(series)
-    width = 0.8 / max(n_series, 1)
+    n_series = max(len(series), 1)
+    n_labels = max(len(labels), 1)
+    group_w = 0.72
+    width = group_w / n_series
+    fig, ax = plt.subplots(figsize=(max(6.4, 0.5 * n_labels * n_series + 2.2), 3.9))
+    x = range(n_labels)
+    all_vals = [v for vals in series.values() for v in vals]
+    integral = all(float(v).is_integer() for v in all_vals)
+    fmt = (lambda v: f"{int(v)}") if integral else (lambda v: f"{v:.3f}")
     for i, (name, values) in enumerate(series.items()):
-        offsets = [xi + i * width for xi in x]
-        ax.bar(offsets, values, width=width, label=name)
-    ax.set_xticks([xi + width * (n_series - 1) / 2 for xi in x])
-    ax.set_xticklabels(labels)
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
-    ax.legend()
+        offsets = [xi - group_w / 2 + width * (i + 0.5) for xi in x]
+        color = _SERIES_COLORS[i % len(_SERIES_COLORS)]
+        ax.bar(offsets, values, width=width * 0.86, label=name, color=color, zorder=3, linewidth=0)
+        for xo, v in zip(offsets, values):
+            ax.annotate(fmt(v), (xo, v), textcoords="offset points", xytext=(0, 3),
+                        ha="center", fontsize=7.5, color=_INK)
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(labels, fontsize=9.5, color=_INK)
+    if ylim is None:
+        top = max(all_vals, default=1.0)
+        ylim = (0, top * 1.12)
+    ax.set_ylim(*ylim)
+    ax.set_ylabel(ylabel, fontsize=9, color=_INK_MUTED)
+    ax.set_title(title, loc="left", fontsize=11.5, color=_INK, pad=24)
+    _style_axes(ax)
+    ax.legend(loc="lower left", bbox_to_anchor=(0, 1.0), ncol=min(n_series, 4), fontsize=8,
+              frameon=False, handlelength=1.2, columnspacing=1.2)
     fig.tight_layout()
     fig.savefig(save_path, dpi=150)
     plt.close(fig)
@@ -234,18 +270,80 @@ class UnitCheck:
     detail: str = ""
 
 
+# 이진 판정(PASS/FAIL, 포함/미포함)은 크기가 아니라 상태이므로 막대그래프 대신
+# 체크리스트·상태 행렬로 그림. 상태 색은 항상 마커 모양과 글자 라벨을 함께 둬서
+# 색만으로 의미를 전달하지 않음(색각 이상, 흑백 인쇄 대비).
+
+
+def _status_marker(ax, x: float, y: float, ok: bool) -> None:
+    color = _STATUS_GOOD if ok else _STATUS_BAD
+    ax.scatter([x], [y], s=140, marker="o" if ok else "X", color=color, zorder=3)
+
+
 def plot_unit_checks(checks: list[UnitCheck], title: str, save_path: Path) -> None:
+    """단위 테스트 결과를 체크리스트 도표로 저장함: 행마다 상태 마커, PASS/FAIL, 이름, 비고(아랫줄)."""
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    labels = [c.name for c in checks]
-    values = [1 if c.passed else 0 for c in checks]
-    colors = ["#55A868" if v else "#C44E52" for v in values]
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.bar(labels, values, color=colors)
-    ax.set_ylim(0, 1.2)
-    ax.set_yticks([0, 1])
-    ax.set_yticklabels(["FAIL", "PASS"])
-    ax.set_title(title)
-    plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
+    n = max(len(checks), 1)
+    passed = sum(c.passed for c in checks)
+    has_detail = any(c.detail.strip() for c in checks)
+    row_h = 0.62 if has_detail else 0.42
+    fig, ax = plt.subplots(figsize=(8, row_h * n + 0.9))
+    ax.set_xlim(0, 1)
+    ax.set_ylim(-0.5, n - 0.5)
+    ax.invert_yaxis()
+    ax.axis("off")
+    for i, c in enumerate(checks):
+        y_name = i - 0.12 if (has_detail and c.detail.strip()) else i
+        _status_marker(ax, 0.03, i, c.passed)
+        ax.text(0.07, i, "PASS" if c.passed else "FAIL", va="center", fontsize=10, fontweight="bold",
+                color=_STATUS_GOOD if c.passed else _STATUS_BAD)
+        ax.text(0.15, y_name, c.name, va="center", fontsize=10, color=_INK)
+        detail = c.detail.replace("\n", " ").strip()
+        if detail:
+            ax.text(0.15, i + 0.24, detail[:90] + ("…" if len(detail) > 90 else ""), va="center",
+                    fontsize=7.5, color=_INK_MUTED)
+    ax.set_title(f"{title}  —  {passed}/{len(checks)} 통과", loc="left", fontsize=11, color=_INK)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+
+
+def plot_status_matrix(
+    row_labels: list[str],
+    col_labels: list[str],
+    values: dict[str, dict[str, bool]],
+    title: str,
+    save_path: Path,
+    true_label: str = "포함",
+    false_label: str = "미포함",
+) -> None:
+    """행 x 열의 이진 상태를 셀 마커와 라벨로 그림(예: 필수 항목 x 기술 커버리지).
+
+    values[col][row] -> bool. 행 이름은 왼쪽, 열 머리글에는 충족 수를 함께 적음.
+    """
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    n_rows, n_cols = max(len(row_labels), 1), max(len(col_labels), 1)
+    label_w = 2.6  # 행 이름 영역 폭(데이터 좌표)
+    fig, ax = plt.subplots(figsize=(1.9 * n_cols + 4.2, 0.55 * n_rows + 1.5))
+    ax.set_xlim(-label_w, n_cols * 1.4 - 0.4)
+    ax.set_ylim(-1.3, n_rows - 0.5)
+    ax.invert_yaxis()
+    ax.axis("off")
+    xs = [j * 1.4 for j in range(n_cols)]
+    for x, col in zip(xs, col_labels):
+        met = sum(1 for r in row_labels if values.get(col, {}).get(r, False))
+        ax.text(x + 0.25, -0.9, f"{col}\n{met}/{n_rows} {true_label}", ha="center", va="center",
+                fontsize=9, fontweight="bold", color=_INK)
+    for i, row in enumerate(row_labels):
+        ax.text(-label_w + 0.05, i, row, ha="left", va="center", fontsize=9, color=_INK)
+        for x, col in zip(xs, col_labels):
+            ok = bool(values.get(col, {}).get(row, False))
+            _status_marker(ax, x, i, ok)
+            ax.text(x + 0.2, i, true_label if ok else false_label, va="center", fontsize=8,
+                    color=_STATUS_GOOD if ok else _STATUS_BAD)
+        if i < n_rows - 1:
+            ax.axhline(i + 0.5, color="#e5e7eb", linewidth=0.8, zorder=1)
+    ax.set_title(title, loc="left", fontsize=11, color=_INK)
     fig.tight_layout()
     fig.savefig(save_path, dpi=150)
     plt.close(fig)

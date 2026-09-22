@@ -16,13 +16,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from matplotlib import pyplot as plt
 
 from src.agents.market_eval.agent import _QUERY_TEMPLATES, REQUIRED_ITEMS, MarketEvalAgent
 from src.common.eval_utils import (
     RubricScore,
     format_evidence,
     format_view_result,
+    plot_bar_comparison,
+    plot_status_matrix,
     score_required_items,
     score_with_rubric,
     tool_calling_accuracy,
@@ -51,43 +52,20 @@ _RUBRIC_LABELS = ["정확성", "완전성", "중립성", "근거연결성"]
 
 
 def _plot_rubric_by_tech(scores: dict[str, RubricScore], save_path: Path) -> None:
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(6, 4))
-    techs = list(scores)
-    width = 0.8 / len(techs)
-    for i, tech in enumerate(techs):
-        vals = [getattr(scores[tech], k) for k in _RUBRIC_KEYS]
-        ax.bar([x + i * width for x in range(len(_RUBRIC_KEYS))], vals, width=width, label=tech)
-    ax.set_xticks([x + width * (len(techs) - 1) / 2 for x in range(len(_RUBRIC_KEYS))])
-    ax.set_xticklabels(_RUBRIC_LABELS)
-    ax.axhline(THRESHOLD, color="gray", linestyle="--", linewidth=1)
-    ax.set_ylim(0, 5)
-    ax.set_ylabel("score (1-5)")
-    ax.set_title(f"{AGENT_NAME} 8.2 루브릭 (기술별)")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=150)
-    plt.close(fig)
+    """루브릭 4항목(명목형) x 기술 2개. 항목 사이에 순서가 없어 선 대신 막대로 둠. 1~5 척도 고정."""
+    plot_bar_comparison(
+        _RUBRIC_LABELS,
+        {tech: [getattr(r, k) for k in _RUBRIC_KEYS] for tech, r in scores.items()},
+        f"{AGENT_NAME} 8.2 루브릭 (기술별, 임계값 {THRESHOLD})", "score (1-5)", save_path, ylim=(0, 5.6),
+    )
 
 
 def _plot_coverage(coverage: dict[str, dict[str, bool]], save_path: Path) -> None:
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(7, 4))
-    techs = list(coverage)
-    width = 0.8 / len(techs)
-    for i, tech in enumerate(techs):
-        vals = [1 if coverage[tech][item] else 0 for item in REQUIRED_ITEMS]
-        ax.bar([x + i * width for x in range(len(REQUIRED_ITEMS))], vals, width=width, label=tech)
-    ax.set_xticks([x + width * (len(techs) - 1) / 2 for x in range(len(REQUIRED_ITEMS))])
-    ax.set_xticklabels([item[:14] for item in REQUIRED_ITEMS], fontsize=8)
-    ax.set_ylim(0, 1.2)
-    ax.set_yticks([0, 1])
-    ax.set_yticklabels(["미포함", "포함"])
-    ax.set_title(f"{AGENT_NAME} 9.2절 필수 항목 커버리지")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=150)
-    plt.close(fig)
+    """포함/미포함 이진 판정이라 막대 대신 항목 x 기술 상태 행렬로 그림."""
+    plot_status_matrix(
+        REQUIRED_ITEMS, list(coverage), coverage,
+        f"{AGENT_NAME} 9.2절 필수 항목 커버리지", save_path,
+    )
 
 
 def _finalized(result: dict) -> dict:
