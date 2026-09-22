@@ -21,6 +21,8 @@ from matplotlib import font_manager, rcParams
 from matplotlib import pyplot as plt
 from pydantic import BaseModel, Field
 
+from src.common.state import ViewResult
+
 # 한글 라벨이 깨지지 않도록, 설치돼 있는 한글 폰트를 찾아서 씀(없으면 기본값 유지).
 for _font_name in ("AppleGothic", "Malgun Gothic", "NanumGothic", "Noto Sans CJK KR"):
     if _font_name in {f.name for f in font_manager.fontManager.ttflist}:
@@ -123,27 +125,63 @@ def best_label(labels: list[str], scores: dict[str, list[float]], key: str) -> s
     return labels[best_idx]
 
 
+# 도표 공통 잉크·상태 색
+_STATUS_GOOD = "#0ca30c"
+_STATUS_BAD = "#d03b3b"
+_INK = "#1f2933"
+_INK_MUTED = "#6b7280"
+
+# 같은 지표를 여러 조건(청킹 버전, 임베딩 후보, 리라이팅 전/후, 기술)에서 비교하는 막대그래프.
+# 색은 고정 순서(파랑, 주황, 청록, 노랑)로 색각 이상 분리 검증을 통과한 조합이고, 청록·노랑은
+# 배경 대비가 낮아 값 라벨을 항상 함께 둠. 막대 사이 여백과 옅은 가로 격자만 두고 테두리는 뺌.
+_SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
+
+
+def _style_axes(ax) -> None:
+    ax.grid(axis="y", color="#e5e7eb", linewidth=0.8, zorder=0)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color("#d1d5db")
+    ax.tick_params(colors=_INK_MUTED, length=0)
+
+
 def plot_bar_comparison(
     labels: list[str],
     series: dict[str, list[float]],
     title: str,
     ylabel: str,
     save_path: Path,
+    ylim: tuple[float, float] | None = None,
 ) -> None:
-    """버전/후보별 지표 비교 막대 그래프를 PNG로 저장함."""
+    """조건(x) x 지표(막대 색) 비교. 막대마다 값 라벨, 막대 사이 여백, 고정 순서 색, 범례는 그림 위."""
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(6, 4))
-    x = range(len(labels))
-    n_series = len(series)
-    width = 0.8 / max(n_series, 1)
+    n_series = max(len(series), 1)
+    n_labels = max(len(labels), 1)
+    group_w = 0.72
+    width = group_w / n_series
+    fig, ax = plt.subplots(figsize=(max(6.4, 0.5 * n_labels * n_series + 2.2), 3.9))
+    x = range(n_labels)
+    all_vals = [v for vals in series.values() for v in vals]
+    integral = all(float(v).is_integer() for v in all_vals)
+    fmt = (lambda v: f"{int(v)}") if integral else (lambda v: f"{v:.3f}")
     for i, (name, values) in enumerate(series.items()):
-        offsets = [xi + i * width for xi in x]
-        ax.bar(offsets, values, width=width, label=name)
-    ax.set_xticks([xi + width * (n_series - 1) / 2 for xi in x])
-    ax.set_xticklabels(labels)
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
-    ax.legend()
+        offsets = [xi - group_w / 2 + width * (i + 0.5) for xi in x]
+        color = _SERIES_COLORS[i % len(_SERIES_COLORS)]
+        ax.bar(offsets, values, width=width * 0.86, label=name, color=color, zorder=3, linewidth=0)
+        for xo, v in zip(offsets, values):
+            ax.annotate(fmt(v), (xo, v), textcoords="offset points", xytext=(0, 3),
+                        ha="center", fontsize=7.5, color=_INK)
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(labels, fontsize=9.5, color=_INK)
+    if ylim is None:
+        top = max(all_vals, default=1.0)
+        ylim = (0, top * 1.12)
+    ax.set_ylim(*ylim)
+    ax.set_ylabel(ylabel, fontsize=9, color=_INK_MUTED)
+    ax.set_title(title, loc="left", fontsize=11.5, color=_INK, pad=24)
+    _style_axes(ax)
+    ax.legend(loc="lower left", bbox_to_anchor=(0, 1.0), ncol=min(n_series, 4), fontsize=8,
+              frameon=False, handlelength=1.2, columnspacing=1.2)
     fig.tight_layout()
     fig.savefig(save_path, dpi=150)
     plt.close(fig)
@@ -152,6 +190,36 @@ def plot_bar_comparison(
 # ---------------------------------------------------------------------------
 # 8.2절: LLM-as-a-Judge 루브릭 (market_eval/stakeholder_eval/synthesize/report)
 # ---------------------------------------------------------------------------
+
+
+def render_view_result_md(view_result: ViewResult) -> str:
+    """ViewResult를 사람이 읽는 마크다운으로 직렬화함.
+
+    test_runner.py 리포트에 str(view_result)(파이썬 repr, 한 줄로 뭉개짐)를 그대로
+    박아 넣으면 읽기 어려워서 대신 씀. 채점용 target_text에도 이 형태를 쓰면
+    루브릭 채점 모델도 더 안정적으로 읽음.
+    """
+    def _refs(c) -> str:
+        # 최종화 전(id 미확정) 단계에서는 evidence_keys를, 최종화 후에는
+        # evidence_ids를 씀 — 최종화 여부와 무관하게 실제로 있는 쪽을 보여줌.
+        ids = ", ".join(f"#{i}" for i in c.evidence_ids)
+        keys = ", ".join(c.evidence_keys)
+        return ids or keys or "근거 없음"
+
+    lines: list[str] = []
+    for tech, tv in view_result.by_tech.items():
+        lines.append(f"### {tech}\n")
+        lines.append("**확인된 사실**")
+        for c in tv.confirmed_facts:
+            lines.append(f"- {c.statement} ({_refs(c)})")
+        lines.append("\n**반대/우려 사실**")
+        for c in tv.counter_facts:
+            lines.append(f"- {c.statement} ({_refs(c)})")
+        lines.append("\n**미확인 항목**")
+        for item in tv.unconfirmed_items:
+            lines.append(f"- {item}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 class RubricScore(BaseModel):
@@ -202,18 +270,198 @@ class UnitCheck:
     detail: str = ""
 
 
+# 이진 판정(PASS/FAIL, 포함/미포함)은 크기가 아니라 상태이므로 막대그래프 대신
+# 체크리스트·상태 행렬로 그림. 상태 색은 항상 마커 모양과 글자 라벨을 함께 둬서
+# 색만으로 의미를 전달하지 않음(색각 이상, 흑백 인쇄 대비).
+
+
+def _status_marker(ax, x: float, y: float, ok: bool) -> None:
+    color = _STATUS_GOOD if ok else _STATUS_BAD
+    ax.scatter([x], [y], s=140, marker="o" if ok else "X", color=color, zorder=3)
+
+
 def plot_unit_checks(checks: list[UnitCheck], title: str, save_path: Path) -> None:
+    """단위 테스트 결과를 체크리스트 도표로 저장함: 행마다 상태 마커, PASS/FAIL, 이름, 비고(아랫줄)."""
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    labels = [c.name for c in checks]
-    values = [1 if c.passed else 0 for c in checks]
-    colors = ["#55A868" if v else "#C44E52" for v in values]
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.bar(labels, values, color=colors)
-    ax.set_ylim(0, 1.2)
-    ax.set_yticks([0, 1])
-    ax.set_yticklabels(["FAIL", "PASS"])
-    ax.set_title(title)
-    plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
+    n = max(len(checks), 1)
+    passed = sum(c.passed for c in checks)
+    has_detail = any(c.detail.strip() for c in checks)
+    row_h = 0.62 if has_detail else 0.42
+    fig, ax = plt.subplots(figsize=(8, row_h * n + 0.9))
+    ax.set_xlim(0, 1)
+    ax.set_ylim(-0.5, n - 0.5)
+    ax.invert_yaxis()
+    ax.axis("off")
+    for i, c in enumerate(checks):
+        y_name = i - 0.12 if (has_detail and c.detail.strip()) else i
+        _status_marker(ax, 0.03, i, c.passed)
+        ax.text(0.07, i, "PASS" if c.passed else "FAIL", va="center", fontsize=10, fontweight="bold",
+                color=_STATUS_GOOD if c.passed else _STATUS_BAD)
+        ax.text(0.15, y_name, c.name, va="center", fontsize=10, color=_INK)
+        detail = c.detail.replace("\n", " ").strip()
+        if detail:
+            ax.text(0.15, i + 0.24, detail[:90] + ("…" if len(detail) > 90 else ""), va="center",
+                    fontsize=7.5, color=_INK_MUTED)
+    ax.set_title(f"{title}  —  {passed}/{len(checks)} 통과", loc="left", fontsize=11, color=_INK)
     fig.tight_layout()
     fig.savefig(save_path, dpi=150)
     plt.close(fig)
+
+
+def plot_status_matrix(
+    row_labels: list[str],
+    col_labels: list[str],
+    values: dict[str, dict[str, bool]],
+    title: str,
+    save_path: Path,
+    true_label: str = "포함",
+    false_label: str = "미포함",
+) -> None:
+    """행 x 열의 이진 상태를 셀 마커와 라벨로 그림(예: 필수 항목 x 기술 커버리지).
+
+    values[col][row] -> bool. 행 이름은 왼쪽, 열 머리글에는 충족 수를 함께 적음.
+    """
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    n_rows, n_cols = max(len(row_labels), 1), max(len(col_labels), 1)
+    label_w = 2.6  # 행 이름 영역 폭(데이터 좌표)
+    fig, ax = plt.subplots(figsize=(1.9 * n_cols + 4.2, 0.55 * n_rows + 1.5))
+    ax.set_xlim(-label_w, n_cols * 1.4 - 0.4)
+    ax.set_ylim(-1.3, n_rows - 0.5)
+    ax.invert_yaxis()
+    ax.axis("off")
+    xs = [j * 1.4 for j in range(n_cols)]
+    for x, col in zip(xs, col_labels):
+        met = sum(1 for r in row_labels if values.get(col, {}).get(r, False))
+        ax.text(x + 0.25, -0.9, f"{col}\n{met}/{n_rows} {true_label}", ha="center", va="center",
+                fontsize=9, fontweight="bold", color=_INK)
+    for i, row in enumerate(row_labels):
+        ax.text(-label_w + 0.05, i, row, ha="left", va="center", fontsize=9, color=_INK)
+        for x, col in zip(xs, col_labels):
+            ok = bool(values.get(col, {}).get(row, False))
+            _status_marker(ax, x, i, ok)
+            ax.text(x + 0.2, i, true_label if ok else false_label, va="center", fontsize=8,
+                    color=_STATUS_GOOD if ok else _STATUS_BAD)
+        if i < n_rows - 1:
+            ax.axhline(i + 0.5, color="#e5e7eb", linewidth=0.8, zorder=1)
+    ax.set_title(title, loc="left", fontsize=11, color=_INK)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# 9.2·9.3절 필수 항목 커버리지 + 규칙 기반 구조 검사 (market_eval/stakeholder_eval)
+# 8.2 루브릭의 "완전성"과 "근거 연결성"을 항목 단위로 분해해 어디가 미달인지 보여줌.
+# ---------------------------------------------------------------------------
+
+
+class ItemCoverage(BaseModel):
+    item: str
+    covered: bool
+    reason: str = ""
+
+
+class CoverageResult(BaseModel):
+    items: list[ItemCoverage] = Field(default_factory=list)
+
+
+def score_required_items(judge_llm: Any, view_text: str, tech: str, required_items: list[str]) -> CoverageResult:
+    """9장 평가 기준표의 필수 항목이 기술별 ViewResult에 실제로 담겼는지 LLM 채점자가 항목별로 판정함."""
+    prompt = (
+        f"다음은 '{tech}' 기술에 대한 관점 평가 결과임. 아래 필수 항목 각각에 대해, "
+        "평가 결과의 확인된 사실/반대 사실 중 그 항목과 주제상 관련된 문장이 하나라도 있으면 "
+        "covered=true로 판정해줘 — 항목명이 문장에 그대로 쓰여 있을 필요는 없고, 내용상 그 "
+        "항목을 뒷받침하거나 설명하면 충분함(예: '투자 업계의 평가' 항목은 '투자자'·'애널리스트'·"
+        "'기관투자가'·'주가' 같은 표현이 들어간 문장이면 포함으로 봄). 관련 문장이 정말 하나도 "
+        "없을 때만 covered=false로 판정하고, reason에는 어떤 문장을 근거로 판단했는지(또는 왜 "
+        "없다고 판단했는지) 간단히 적어줘. 항목명은 그대로 돌려줘.\n\n"
+        "[필수 항목]\n" + "\n".join(f"- {i}" for i in required_items)
+        + f"\n\n[평가 결과]\n{view_text}"
+    )
+    scorer = judge_llm.with_structured_output(CoverageResult)
+    result: CoverageResult = scorer.invoke(prompt)
+    # 항목명이 바뀌어 돌아오면 순서 기준으로 맞춤
+    if len(result.items) == len(required_items):
+        for it, name in zip(result.items, required_items):
+            it.item = name
+    return result
+
+
+@dataclass
+class ViewStructureStats:
+    """ViewResult 하나(기술 하나)에 대한 규칙 기반 수치."""
+
+    n_confirmed: int
+    n_counter: int
+    n_unconfirmed: int
+    n_claims_with_evidence: int
+    n_claims_valid_evidence: int
+    n_evidence: int
+    n_evidence_counter: int
+
+    @property
+    def n_claims(self) -> int:
+        return self.n_confirmed + self.n_counter
+
+    @property
+    def evidence_linkage_ratio(self) -> float:
+        return self.n_claims_valid_evidence / self.n_claims if self.n_claims else 0.0
+
+
+def view_structure_stats(view: Any, evidence: list[Any], tech: str) -> ViewStructureStats:
+    """8.2 근거 연결성·7.7 반대 근거 유무를 코드로 계산함(LLM 채점과 별개의 확정 수치)."""
+    tech_evidence = [e for e in evidence if e.tech == tech]
+    valid_ids = {e.id for e in tech_evidence}
+    claims = list(view.confirmed_facts) + list(view.counter_facts)
+    return ViewStructureStats(
+        n_confirmed=len(view.confirmed_facts),
+        n_counter=len(view.counter_facts),
+        n_unconfirmed=len(view.unconfirmed_items),
+        n_claims_with_evidence=sum(1 for c in claims if c.evidence_ids),
+        n_claims_valid_evidence=sum(
+            1 for c in claims if c.evidence_ids and set(c.evidence_ids) <= valid_ids
+        ),
+        n_evidence=len(tech_evidence),
+        n_evidence_counter=sum(1 for e in tech_evidence if e.stance == "반대"),
+    )
+
+
+def tool_calling_accuracy(
+    queries_by_tech: dict[str, list[str]], techs: list[Any], templates: list[str]
+) -> tuple[float, list[str]]:
+    """8.3절 Tool Calling Accuracy: 실제 던진 질의가 코드에 고정된 템플릿과 일치하는 비율.
+
+    질의는 코드가 생성하므로 정상이면 1.0임. 템플릿 수가 두 기술 간 동일한지
+    (10장 대칭 질의)도 함께 확인해 어긋난 항목 목록을 돌려줌.
+    """
+    issues: list[str] = []
+    total = matched = 0
+    for tech in techs:
+        expected = [t.format(tech=tech.name, anchor=tech.search_anchor) for t in templates]
+        actual = queries_by_tech.get(tech.name, [])
+        for q in actual:
+            total += 1
+            if q in expected:
+                matched += 1
+            else:
+                issues.append(f"템플릿 밖 질의: {q}")
+        if len(actual) != len(expected):
+            issues.append(f"{tech.name}: 질의 수 {len(actual)} != 템플릿 수 {len(expected)}")
+    return (matched / total if total else 0.0), issues
+
+
+def format_view_result(view: Any) -> str:
+    """ViewResult(기술 하나)를 채점자가 읽기 좋은 텍스트로 직렬화함."""
+    lines = ["확인된 사실:"]
+    lines += [f"  - {c.statement} {''.join(f'[근거#{i}]' for i in c.evidence_ids)}" for c in view.confirmed_facts] or ["  (없음)"]
+    lines.append("반대 사실:")
+    lines += [f"  - {c.statement} {''.join(f'[근거#{i}]' for i in c.evidence_ids)}" for c in view.counter_facts] or ["  (없음)"]
+    lines.append("미확인 항목:")
+    lines += [f"  - {u}" for u in view.unconfirmed_items] or ["  (없음)"]
+    return "\n".join(lines)
+
+
+def format_evidence(evidence: list[Any], tech: str) -> str:
+    return "\n".join(
+        f"[근거#{e.id}] ({e.stance}) {e.source} :: {e.quote}" for e in evidence if e.tech == tech
+    ) or "(없음)"

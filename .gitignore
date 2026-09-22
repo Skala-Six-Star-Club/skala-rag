@@ -10,11 +10,7 @@ venv/
 .env.*
 !.env.example
 
-# Doc Pool source PDFs (copyrighted arXiv papers, fetched locally per README)
-data/doc_pool/*.pdf
-
 # Embedding DB / FAISS indexes (rebuildable, per-teammate versioned)
-# index*/ covers index/ (기본) and index_<embedding-name>/ (3.1절 임베딩 후보 비교용) 둘 다
 scripts/*/pdf/v*/index*/
 scripts/*/pdf/v*/*.faiss
 scripts/*/pdf/v*/*.pkl
