@@ -26,13 +26,18 @@ from src.common.base_agent import rewrite_query
 from src.common.doc_pool import DOC_POOL_SPECS
 from src.common.eval_utils import (
     GoldenQuery,
+    best_label,
     hit_rate_at_k,
     load_golden_dataset,
     load_golden_dataset_all,
     mrr,
     plot_bar_comparison,
 )
-from src.common.models import get_embedding_model, get_embedding_model_by_name
+from src.common.models import (
+    get_embedding_model,
+    get_embedding_model_by_name,
+    release_embedding_model,
+)
 from src.common.tools import build_doc_pool_index, build_doc_pool_index_naive, paper_search
 
 AGENT_NAME = "domain_eval"
@@ -41,6 +46,25 @@ HERE = Path(__file__).parent
 TOP_K = config.DEFAULT_TOP_K
 THRESHOLD_HIT_RATE = 0.8  # 8.1절 제안 임계값
 THRESHOLD_MRR = 0.6
+
+# 5장·6.1절이 채택한 기본값. 실측 최고 성능과 다르면 결론에서 재검토 대상으로 표시함.
+ADOPTED_CHUNK = "v1_section_aware"
+# 채택 임베딩은 config.EMBEDDING_MODEL을 후보 목록에서 역조회함(후보 밖이면 모델 id 그대로).
+ADOPTED_EMBEDDING = next(
+    (name for name, mid in EMBEDDING_CANDIDATES.items() if mid == config.EMBEDDING_MODEL),
+    config.EMBEDDING_MODEL,
+)
+
+
+def _index_dir(version: str, embedding_name: str) -> Path:
+    """색인 경로를 청킹 버전 x 임베딩 이름으로 고정함. 채택 임베딩을 바꿔도 이전
+    모델의 색인을 덮어쓰지 않고, 같은 조합은 재사용함."""
+    return HERE / "pdf" / version / f"index_{embedding_name}"
+# 3차 비교실험 후 기본값 off. config.QUERY_REWRITING을 따라감
+ADOPTED_QUERY_REWRITING = "리라이팅 질의" if config.QUERY_REWRITING else "원본 질의"
+# 랭킹 기준 지표. Hit Rate@5는 표본이 작으면 1.000에 자주 붙어 후보를 못 가르므로,
+# 표본이 가장 큰(30개) camp 전체 필터의 MRR을 씀(best_label 참고).
+RANKING_KEY = "MRR (camp 전체)"
 
 
 def _get_or_build_index(embedding_model, naive: bool, index_dir: Path) -> FAISS:
@@ -53,6 +77,20 @@ def _get_or_build_index(embedding_model, naive: bool, index_dir: Path) -> FAISS:
     index_dir.mkdir(parents=True, exist_ok=True)
     index.save_local(str(index_dir))
     return index
+
+
+# 리라이팅 결과 기록: golden id -> (원본, 리라이팅). 같은 질의를 role=target과 camp 전체
+# 두 필터에서 각각 다시 리라이팅하면 필터 간 질의가 달라져 비교가 흐려지므로 1회만
+# 호출해 재사용하고, 리포트에도 남겨 실행 간 변동 원인을 추적할 수 있게 함.
+REWRITE_LOG: dict[int, tuple[str, str]] = {}
+
+
+def _query_for(g: GoldenQuery, use_rewrite: bool) -> str:
+    if not use_rewrite:
+        return g.query_ko
+    if g.id not in REWRITE_LOG:
+        REWRITE_LOG[g.id] = (g.query_ko, rewrite_query(g.query_ko, g.tech))
+    return REWRITE_LOG[g.id][1]
 
 
 def _retrieve_by_filter(
@@ -72,7 +110,7 @@ def _retrieve_by_filter(
         results = [
             paper_search(
                 index,
-                rewrite_query(g.query_ko, g.tech) if use_rewrite else g.query_ko,
+                _query_for(g, use_rewrite),
                 k=TOP_K,
                 role="target",
             )
@@ -83,7 +121,7 @@ def _retrieve_by_filter(
         results = [
             paper_search(
                 index,
-                rewrite_query(g.query_ko, g.tech) if use_rewrite else g.query_ko,
+                _query_for(g, use_rewrite),
                 k=TOP_K,
                 camp=g.camp,
             )
@@ -126,7 +164,7 @@ def run_chunking_comparison(goldens: list[GoldenQuery]):
     labels = ["v1_section_aware", "v2_naive"]
     scores = _empty_filter_scores()
     for label, naive in zip(labels, (False, True)):
-        index = _get_or_build_index(embedding, naive, HERE / "pdf" / label.split("_")[0] / "index")
+        index = _get_or_build_index(embedding, naive, _index_dir(label.split("_")[0], ADOPTED_EMBEDDING))
         _score_both_filters(index, goldens, scores)
     plot_bar_comparison(
         labels, scores, f"청킹 전략 비교 ({AGENT_NAME})", "score",
@@ -138,21 +176,22 @@ def run_chunking_comparison(goldens: list[GoldenQuery]):
 def run_embedding_comparison(goldens: list[GoldenQuery]):
     """3.1절: 임베딩 후보 비교(v1 청킹 위에서). 전체 골든셋, 필터 조합별로 채점함(8.1절).
 
-    bge-m3는 청킹 비교에서 이미 v1/index로 색인해 뒀으므로 그 결과를 그대로 재사용함
-    (같은 청킹+임베딩 조합을 두 번 embed하지 않기 위함 — 3개 후보 중 CPU에서 가장
-    비싼 게 전체 코퍼스 재임베딩이라 여기서 1회분을 아낌).
+    채택 임베딩은 청킹 비교에서 이미 색인해 뒀으므로 그대로 재사용함(같은 청킹+임베딩
+    조합을 두 번 embed하지 않기 위함).
     """
     labels = list(EMBEDDING_CANDIDATES)
     scores = _empty_filter_scores()
     for name, model_id in EMBEDDING_CANDIDATES.items():
-        if name == "bge-m3":
+        if name == ADOPTED_EMBEDDING:
             embedding = get_embedding_model()
-            index_dir = HERE / "pdf" / "v1" / "index"
         else:
             embedding = get_embedding_model_by_name(model_id)
-            index_dir = HERE / "pdf" / "v1" / f"index_{name}"
-        index = _get_or_build_index(embedding, naive=False, index_dir=index_dir)
+        index = _get_or_build_index(embedding, naive=False, index_dir=_index_dir("v1", name))
         _score_both_filters(index, goldens, scores)
+        if name != ADOPTED_EMBEDDING:
+            # 후보 모델은 lru_cache 대상이 아니므로 다음 후보 전에 GPU 메모리를 비움
+            del index
+            release_embedding_model(embedding)
     plot_bar_comparison(
         labels, scores, f"임베딩 모델 비교 ({AGENT_NAME})", "score",
         HERE / "report_assets" / "embedding_comparison.png",
@@ -161,14 +200,14 @@ def run_embedding_comparison(goldens: list[GoldenQuery]):
 
 
 def run_query_rewriting_comparison(goldens: list[GoldenQuery]):
-    """3.3절: Query Rewriting 적용 전/후 비교(v1 청킹, bge-m3 위에서), 필터 조합별로
+    """3.3절: Query Rewriting 적용 전/후 비교(v1 청킹, 채택 임베딩 위에서), 필터 조합별로
     채점함(8.1절).
 
     이 에이전트 관점(perspective=domain)의 골든 질의만 씀 — 리라이팅 효과는
     질의 유형에 따라 달라질 수 있어, 청킹/임베딩과 달리 에이전트별로 나눠 봄.
     """
     embedding = get_embedding_model()
-    index = _get_or_build_index(embedding, naive=False, index_dir=HERE / "pdf" / "v1" / "index")
+    index = _get_or_build_index(embedding, naive=False, index_dir=_index_dir("v1", ADOPTED_EMBEDDING))
     labels = ["원본 질의", "리라이팅 질의"]
     scores = _empty_filter_scores()
     for use_rewrite in (False, True):
@@ -190,6 +229,17 @@ def _fmt_table(labels: list[str], scores: dict[str, list[float]]) -> str:
     return header + rows
 
 
+def _fmt_rewrite_table() -> str:
+    def _cell(text: str) -> str:
+        return text.replace("|", "\\|").replace("\n", " ")
+
+    rows = "".join(
+        f"| {gid} | {_cell(orig)} | {_cell(rew)} |\n"
+        for gid, (orig, rew) in sorted(REWRITE_LOG.items())
+    )
+    return "| id | 원본 질의 | 리라이팅 질의 |\n|---|---|---|\n" + rows
+
+
 def build_report(chunk, emb, qr) -> str:
     chunk_labels, chunk_scores = chunk
     emb_labels, emb_scores = emb
@@ -208,6 +258,27 @@ def build_report(chunk, emb, qr) -> str:
         else f"목표 임계값(Hit Rate@5 ≥ {THRESHOLD_HIT_RATE}, MRR ≥ {THRESHOLD_MRR})에 미달함 — "
         "6.1절 절차대로 임베딩 후보 교체를 검토해야 함."
     )
+
+    best_chunk = best_label(chunk_labels, chunk_scores, RANKING_KEY)
+    best_emb = best_label(emb_labels, emb_scores, RANKING_KEY)
+    best_qr = best_label(qr_labels, qr_scores, RANKING_KEY)
+
+    def _match_note(name: str, best: str, adopted: str) -> str:
+        if best == adopted:
+            return f"- {name}: 채택안({adopted})이 {RANKING_KEY} 기준으로도 최고 성능임."
+        return (
+            f"- {name}: 채택안은 {adopted}이지만, {RANKING_KEY} 기준 실측 최고 성능은 "
+            f"**{best}**임 — 6.1절/5장 절차대로 재검토 대상."
+        )
+
+    combination_notes = "\n".join(
+        [
+            _match_note("청킹", best_chunk, ADOPTED_CHUNK),
+            _match_note("임베딩", best_emb, ADOPTED_EMBEDDING),
+            _match_note("Query Rewriting", best_qr, ADOPTED_QUERY_REWRITING),
+        ]
+    )
+
     return f"""# domain_eval 테스트 리포트
 
 설계 근거: docs/agentic-rag-design.md 7.4절 / docs/schedule.md 3.1~3.3절
@@ -239,13 +310,24 @@ def build_report(chunk, emb, qr) -> str:
 {_fmt_table(qr_labels, qr_scores)}
 ![Query Rewriting 비교](report_assets/query_rewriting_comparison.png)
 
+리라이팅 질의 목록(실행마다 LLM 출력이 달라질 수 있어 변동 추적용으로 기록함):
+
+{_fmt_rewrite_table()}
+
 ## 4. 결론
 
 {verdict}
 
+**채택안 vs 실측 최고 성능** ({RANKING_KEY} 기준):
+
+{combination_notes}
+
 운영 중인 domain_eval은 여기에 더해 "실험 환경"/"평가" 절 우선 재랭킹을 적용함
 (7.4절 2번 항목). 이 재랭킹은 별도 실험 없이 채택된 장치라, 위 수치와 별개로
 실제 운영 결과에서 순위 개선 여부를 추가로 관찰할 것(schedule.md 3.2절 참고).
+현재 채택 임베딩은 {ADOPTED_EMBEDDING}임(2026-09-22 비교실험 결과로 bge-m3에서 교체).
+골든셋이 30개(role=target 필터는 10개)뿐이라 차이가 통계적으로 확고한지는
+표본을 늘려 다시 확인해 볼 것.
 """
 
 
