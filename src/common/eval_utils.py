@@ -270,8 +270,13 @@ class CoverageResult(BaseModel):
 def score_required_items(judge_llm: Any, view_text: str, tech: str, required_items: list[str]) -> CoverageResult:
     """9장 평가 기준표의 필수 항목이 기술별 ViewResult에 실제로 담겼는지 LLM 채점자가 항목별로 판정함."""
     prompt = (
-        f"다음은 '{tech}' 기술에 대한 관점 평가 결과임. 아래 필수 항목 각각이 "
-        "결과 안에 실제 근거와 함께 서술돼 있는지 항목별로 판정해줘. 항목명은 그대로 돌려줘.\n\n"
+        f"다음은 '{tech}' 기술에 대한 관점 평가 결과임. 아래 필수 항목 각각에 대해, "
+        "평가 결과의 확인된 사실/반대 사실 중 그 항목과 주제상 관련된 문장이 하나라도 있으면 "
+        "covered=true로 판정해줘 — 항목명이 문장에 그대로 쓰여 있을 필요는 없고, 내용상 그 "
+        "항목을 뒷받침하거나 설명하면 충분함(예: '투자 업계의 평가' 항목은 '투자자'·'애널리스트'·"
+        "'기관투자가'·'주가' 같은 표현이 들어간 문장이면 포함으로 봄). 관련 문장이 정말 하나도 "
+        "없을 때만 covered=false로 판정하고, reason에는 어떤 문장을 근거로 판단했는지(또는 왜 "
+        "없다고 판단했는지) 간단히 적어줘. 항목명은 그대로 돌려줘.\n\n"
         "[필수 항목]\n" + "\n".join(f"- {i}" for i in required_items)
         + f"\n\n[평가 결과]\n{view_text}"
     )

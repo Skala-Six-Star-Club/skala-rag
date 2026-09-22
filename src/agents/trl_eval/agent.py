@@ -39,7 +39,7 @@ REQUIRED_ITEMS = [
 ]
 PERSPECTIVE_LABEL = "기술 성숙도(TRL)"
 EXTRA_INSTRUCTIONS = (
-    "5. confirmed_facts의 첫 문장은 반드시 'TRL 추정 구간: N~M (추정)' 형식으로 시작하고, "
+    "6. confirmed_facts의 첫 문장은 반드시 'TRL 추정 구간: N~M (추정)' 형식으로 시작하고, "
     "그 구간을 고른 사유를 근거 번호와 함께 이어 씀. TRL은 공개 정보 기반 추정임을 명시함"
 )
 WEB_MAX_RESULTS = 5

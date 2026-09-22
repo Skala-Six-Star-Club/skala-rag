@@ -55,7 +55,7 @@ REQUIRED_ITEMS = [
 ]
 PERSPECTIVE_LABEL = "도메인 적용"
 EXTRA_INSTRUCTIONS = (
-    "5. 도메인은 '{domain}'임. 각 항목을 이 도메인 조건에 비추어 서술하고, "
+    "6. 도메인은 '{domain}'임. 각 항목을 이 도메인 조건에 비추어 서술하고, "
     "논문 실험 환경이 도메인과 다르면 그 차이를 unconfirmed_items나 counter_facts에 적음"
 )
 WEB_MAX_RESULTS = 5
