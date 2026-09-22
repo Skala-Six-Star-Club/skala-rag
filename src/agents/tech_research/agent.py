@@ -20,12 +20,13 @@ from pydantic import BaseModel, Field
 
 from src.common import config
 from src.common.base_agent import BaseAgent
-from src.common.doc_pool import DOC_POOL_SPECS
 from src.common.models import get_generation_llm
 from src.common.state import AgentState, Evidence, Reference, TechProfile
 from src.common.tools import (
     format_paper_source,
     get_shared_index,
+    paper_reference,
+    paper_reference_url,
     paper_search,
     strip_citation_tokens,
 )
@@ -86,21 +87,6 @@ def _search_overview(index: FAISS, query: str, tech: str, k: int):
     return (intro + rest)[:k]
 
 
-def _reference_for(tech_name: str) -> Reference | None:
-    spec = next((s for s in DOC_POOL_SPECS if s["tech"] == tech_name), None)
-    if spec is None:
-        return None
-    return Reference(
-        id=0,  # report 단계에서 인용 순서대로 재번호 가능. 여기서는 arXiv 기준 식별자만 채움
-        type="paper",
-        author_or_org="arXiv",
-        year="20" + spec["arxiv"][:2],
-        title=spec["file"].removesuffix(".pdf"),
-        venue="arXiv",
-        url=f"https://arxiv.org/abs/{spec['arxiv']}",
-    )
-
-
 class TechResearchAgent(BaseAgent):
     name = "tech_research"
     uses_rag = True
@@ -113,6 +99,7 @@ class TechResearchAgent(BaseAgent):
         tech_profiles: dict[str, TechProfile] = {}
         new_evidence: list[Evidence] = []
         new_references: list[Reference] = []
+        cited_paper_techs: set[str] = set()  # 비교 논문 포함, 참고문헌은 논문당 1회
         ordinal = 0
         llm = get_generation_llm().with_structured_output(_ExtractedProfile)
 
@@ -145,13 +132,20 @@ class TechResearchAgent(BaseAgent):
                 nonlocal ordinal
                 passages = []
                 for doc in docs:
+                    doc_tech = doc.metadata.get("tech", tech.name)
                     ev = self.new_evidence(
                         state, tech.name, ordinal,
                         perspective="tech_research", source_type="논문",
-                        source=format_paper_source(doc.metadata.get("tech", tech.name), doc),
+                        source=format_paper_source(doc_tech, doc),
                         quote=doc.page_content[:200],
+                        reference_url=paper_reference_url(doc_tech),
                     )
                     new_evidence.append(ev)
+                    if doc_tech not in cited_paper_techs:
+                        cited_paper_techs.add(doc_tech)
+                        ref = paper_reference(doc_tech)
+                        if ref is not None:
+                            new_references.append(ref)
                     num = len(key_by_num) + 1  # 프롬프트용 로컬 번호(기술마다 1부터)
                     key_by_num[num] = ev.key
                     passages.append(f"[근거#{num}] ({doc.metadata.get('tech')}, p.{doc.metadata.get('page')}) {doc.page_content}")
@@ -180,9 +174,6 @@ class TechResearchAgent(BaseAgent):
                 differentiation=strip_citation_tokens(extracted.differentiation),
                 evidence_keys=cited_keys,
             )
-            ref = _reference_for(tech.name)
-            if ref is not None:
-                new_references.append(ref)
 
         return {
             "tech_profiles": tech_profiles,
