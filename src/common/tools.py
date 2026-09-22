@@ -353,6 +353,36 @@ def web_search(query: str, max_results: int = 5) -> list[WebResult]:
     ]
 
 
+def web_search_ladder(
+    queries: list[str], max_results: int = 5
+) -> tuple[list[WebResult], str | None]:
+    """질의 후보를 순서대로 시도해 처음 결과가 나온 것을 돌려줌(웹 전용 에이전트의 0건 분기).
+
+    market_eval·stakeholder_eval은 논문 검색이 없어 웹이 0건이면 근거가 0건이 되고,
+    evidence_check 규칙 1·3과 judge의 균형 판정이 연쇄로 걸림. 한국어 질의가 0건이면
+    영어, 앵커 제거 순으로 넓히고, Tavily가 계속 0건이면 DuckDuckGo로 한 번 더 봄.
+    반환: (결과, 실제로 결과를 낸 질의). 전부 0건이면 ([], None).
+    """
+    for q in queries:
+        try:
+            results = web_search(q, max_results=max_results)
+        except Exception as exc:  # 검색 API 오류는 0건과 같이 다음 후보로 넘어감
+            results = []
+            print(f"[web_search_ladder] '{q}' 실패: {exc}")
+        if results:
+            return results, q
+    if config.TAVILY_API_KEY:  # Tavily가 전부 0건이면 다른 엔진으로 마지막 시도
+        for q in queries[:2]:
+            try:
+                results = _web_search_ddg(q, max_results)
+            except Exception as exc:
+                results = []
+                print(f"[web_search_ladder] ddg '{q}' 실패: {exc}")
+            if results:
+                return results, f"{q} (ddg)"
+    return [], None
+
+
 # ---------------------------------------------------------------------------
 # summarize_sources (4장): 검색 결과를 주장 단위로 요약하고 지지/반대 근거로 나눔
 # ---------------------------------------------------------------------------
