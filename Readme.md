@@ -52,7 +52,7 @@ skala-rag/
 │   │   ├── pdf/v2/index/      # naive 슬라이싱 비교 버전 FAISS 색인 (gitignore)
 │   │   ├── index_config.py    # 청킹/임베딩 비교실험 설정
 │   │   ├── test_runner.py     # Hit Rate@5·MRR 측정 + 그래프 + 리포트 생성
-│   │   └── tech_research_report.md  # 실행 결과물 (gitignore)
+│   │   └── tech_research_report.md  # 실행 결과물 (팀 공유용, git 추적함)
 │   ├── trl_eval/, domain_eval/   # 위와 동일 구조(RAG 3종)
 │   ├── select_tech/, evidence_check/, judge/   # 단위 테스트 / 스팟체크 test_runner.py
 │   └── market_eval/, stakeholder_eval/, synthesize/, report/  # 8.2 루브릭 test_runner.py
@@ -204,8 +204,9 @@ RAG 3종의 `test_runner.py`는:
 2. `v1` 청킹 위에서 임베딩 후보(bge-m3/multilingual-e5-large/Qwen3-Embedding-0.6B)를
    비교함
 3. Query Rewriting 적용 전/후를 비교함
-4. `report_assets/*.png` 막대그래프와 `{agent}_report.md`를 저장함(둘 다 gitignore —
-   팀원마다 로컬에서 재현하는 실행 결과물이므로 공유가 필요하면 캡처해 별도로 공유)
+4. `report_assets/*.png` 막대그래프와 `{agent}_report.md`를 저장함(둘 다 git 추적함 —
+   팀원끼리 결과를 비교·공유하려고 커밋 대상으로 둠. 실행할 때마다 값이 바뀔 수
+   있으니, 재실행 후에는 바뀐 리포트를 다시 커밋해서 최신 상태로 유지할 것)
 
 모든 `test_runner.py`는 자신의 `scripts/{agent}/` 아래에만 쓰기 때문에 10개를 동시에
 실행해도 서로 영향 없음.
