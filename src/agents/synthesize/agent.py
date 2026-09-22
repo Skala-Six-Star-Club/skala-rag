@@ -45,11 +45,14 @@ class SynthesizeAgent(BaseAgent):
         )
 
         feedback = state.get("judge_feedback")
-        if feedback is not None:
+        is_rewrite = feedback is not None
+        if is_rewrite:
             prompt += f"\n[이전 검수에서 지적된 사항, 반드시 반영할 것]\n{feedback}"
 
         # TODO(담당자): 프롬프트 문구를 다듬을 것(예: 관점 결과를 dict 그대로
         # 넣지 말고 사람이 읽기 좋은 형태로 직렬화). 구조화 출력 호출 자체는 동작함.
         llm = get_generation_llm().with_structured_output(Synthesis)
         synthesis: Synthesis = llm.invoke(prompt)  # type: ignore[assignment]
-        return {"synthesis": synthesis}
+        # 12장 "반복 2" 예산(1회)을 그래프 조건 분기가 확인할 수 있게 재작성 횟수를 기록함
+        rewrite_count = state.get("rewrite_count", 0) + (1 if is_rewrite else 0)
+        return {"synthesis": synthesis, "rewrite_count": rewrite_count}
