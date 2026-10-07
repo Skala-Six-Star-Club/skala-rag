@@ -612,8 +612,11 @@ class ReportAgent(BaseAgent):
         }
 
         sections = {title: normalize_citations(body) for title, body in sections.items()}
+        # SUMMARY와 시사점은 synthesize가 문장마다 근거를 붙여 쓴 문장이라 다듬지 않음. 다듬기 LLM이
+        # 근거 번호를 문단 끝으로 몰면 앞 문장들이 근거 없는 문장이 됨
         polished_sections = {
-            title: polish_and_verify(body, valid_ids) for title, body in sections.items()
+            title: body if title in _NO_POLISH_SECTIONS else polish_and_verify(body, valid_ids)
+            for title, body in sections.items()
         }
         polished_sections["6. 한계점"] = polished_sections["6. 한계점"].rstrip() + "\n\n" + _ITME_DISCLOSURE
 
