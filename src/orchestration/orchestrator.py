@@ -83,3 +83,69 @@ def _subtask(round_: int, perspective: str, tech: str, focus: str, reason: str) 
         round=round_,
         reason=reason,
     )
+
+
+def validate_plan(picks: list[_Pick], techs: list[str], max_subtasks: int) -> tuple[list[SubTask], list[str]]:
+    """LLM 계획을 검증하고 보정함. (서브 태스크 목록, 보정 사유 목록)을 반환."""
+    corrections: list[str] = []
+    ordered: list[tuple[str, str, str]] = []  # (관점, 초점, 기술). 고른 순서 유지
+    reasons: dict[tuple[str, str, str], str] = {}
+
+    def add(perspective: str, focus: str, tech: str, reason: str) -> None:
+        key = (perspective, focus, tech)
+        if key not in reasons:
+            ordered.append(key)
+            reasons[key] = reason
+
+    for pick in picks:
+        if pick.tech not in techs or not is_valid_focus(pick.perspective, pick.focus):
+            corrections.append(f"제거: {pick.perspective}/{pick.focus}/{pick.tech} (카탈로그나 대상 기술에 없음)")
+            continue
+        add(pick.perspective, pick.focus, pick.tech, pick.reason)
+
+    pairs = list(dict.fromkeys((p, f) for p, f, _ in ordered))
+    for perspective, focus in pairs:
+        chosen = [t for t in techs if (perspective, focus, t) in reasons]
+        for tech in techs:
+            if tech not in chosen:
+                add(perspective, focus, tech, f"대칭 보정({', '.join(chosen)}와 같은 초점)")
+                corrections.append(f"대칭 보정: {perspective}/{focus}를 {tech}에도 추가")
+
+    for perspective, focus in REQUIRED_FOCUS.items():
+        for tech in techs:
+            if (perspective, focus, tech) not in reasons:
+                add(perspective, focus, tech, "필수 초점")
+                corrections.append(f"필수 초점 보정: {perspective}/{focus}/{tech}")
+
+    def cell_foci(perspective: str, tech: str, keys: list[tuple[str, str, str]]) -> list[str]:
+        return [f for p, f, t in keys if p == perspective and t == tech]
+
+    # 커버리지: 칸마다 반대 근거(counter)가 아닌 초점이 하나 이상 있어야 함. counter만 있는 칸은
+    # 부정적 근거만 수집되어 그 칸의 서술이 한쪽으로 기움
+    for perspective in VIEW_PERSPECTIVES:
+        for tech in techs:
+            foci = cell_foci(perspective, tech, ordered)
+            if all(f == COUNTER for f in foci):
+                kind = "빈 칸 보정" if not foci else "균형 보정"
+                add(perspective, DEFAULT_FOCUS[perspective], tech, f"{kind}(관점 커버리지)")
+                corrections.append(f"{kind}: {perspective}/{tech}에 {DEFAULT_FOCUS[perspective]} 추가")
+
+    # 상한: 뒤에 고른 (관점, 초점) 쌍부터 두 기술 함께 제거. 필수 초점은 남기고, 제거 뒤에도
+    # 모든 칸에 counter가 아닌 초점이 남는 경우만 제거
+    if len(ordered) > max_subtasks:
+        for perspective, focus in reversed(list(dict.fromkeys((p, f) for p, f, _ in ordered))):
+            if len(ordered) <= max_subtasks:
+                break
+            if REQUIRED_FOCUS.get(perspective) == focus:
+                continue
+            remaining = [k for k in ordered if (k[0], k[1]) != (perspective, focus)]
+            cells_ok = all(
+                any(f != COUNTER for f in cell_foci(perspective, tech, remaining)) for tech in techs
+            )
+            if not cells_ok:
+                continue
+            ordered = [k for k in ordered if (k[0], k[1]) != (perspective, focus)]
+            corrections.append(f"상한 조정: {perspective}/{focus} 제거(서브 태스크 상한 {max_subtasks})")
+
+    subtasks = [_subtask(0, p, t, f, reasons[(p, f, t)]) for p, f, t in ordered]
+    return subtasks, corrections
