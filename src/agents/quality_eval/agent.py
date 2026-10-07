@@ -83,3 +83,29 @@ class _NeutralityJudgment(BaseModel):
     biased_sentences: list[_BiasFlag] = Field(default_factory=list)
     sentences_without_evidence: list[str] = Field(default_factory=list)
     notes: str = ""
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    va, vb = np.asarray(a), np.asarray(b)
+    denom = float(np.linalg.norm(va) * np.linalg.norm(vb)) or 1e-9
+    return float(np.dot(va, vb) / denom)
+
+
+def _sentences(text: str) -> list[str]:
+    text = _TRAILING_CITATION_RE.sub(lambda m: f" {m.group(2).strip()}{m.group(1)} ", text)
+    return [s.strip(" -*") for s in _SENTENCE_SPLIT_RE.split(text) if s and len(s.strip(" -*")) > 5]
+
+
+def _cited_ids(text: str) -> list[int]:
+    return [int(n) for n in _CITATION_RE.findall(text)]
+
+
+def load_report_json(path: str | Path | None) -> dict[str, Any]:
+    if not path or not Path(path).exists():
+        return {}
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# 규칙 판정. LLM과 임베딩 없이 단위 테스트할 수 있게 순수 함수로 둠
+# ---------------------------------------------------------------------------
