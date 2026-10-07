@@ -19,6 +19,7 @@ from langchain_community.vectorstores import FAISS
 
 from src.common import config
 from src.common.base_agent import BaseAgent
+from src.common.focus import COUNTER
 from src.common.state import AgentState, Evidence, Reference, TechViewResult, ViewResult
 from src.common.tools import (
     extract_view_result,
@@ -63,6 +64,12 @@ EXTRA_INSTRUCTIONS = (
 )
 WEB_MAX_RESULTS = 5
 
+# 단독 실행(서브 태스크 없음) 질의. 1차 수집은 필수 항목 전체를 한 번에 묻고, 재검색은 한계를 물음
+_LEGACY_QUERIES = {
+    "base": ("실험 환경과 요구 하드웨어, 지연 시간, 메모리 비용", "서빙 프레임워크 지연시간 메모리"),
+    COUNTER: ("한계와 실패 사례, 후속 검증", "한계 실패 사례"),
+}
+
 
 class DomainEvalAgent(BaseAgent):
     name = "domain_eval"
@@ -76,7 +83,9 @@ class DomainEvalAgent(BaseAgent):
     def run(self, state: AgentState) -> dict[str, Any]:
         techs = self.scoped_techs(state)  # Send fan-out이면 기술 하나, 아니면 전체
         domain = state["domain"]
-        is_retry = self.name in (state.get("retry_targets") or [])
+        spec = self.focus_spec(state, "domain")
+        required = REQUIRED_ITEMS if spec is None else list(spec.items)
+        followup = self.is_followup(state)
         prior = state.get("domain_result")
         new_evidence: list[Evidence] = []
         new_references: list[Reference] = []
@@ -86,10 +95,13 @@ class DomainEvalAgent(BaseAgent):
             self.last_queries = {}
 
         for tech in techs:
-            # 12장 "반복 1": 재검색 시 질의 초점을 한계·실패 사례·후속 검증으로 바꿈
-            focus = "한계와 실패 사례, 후속 검증" if is_retry else "실험 환경과 요구 하드웨어, 지연 시간, 메모리 비용"
-            paper_query = self.rewrite_query(f"{tech.name} {domain} {focus}", tech.name)
-            web_query = f"{tech.name} {tech.search_anchor} {domain} " + ("한계 실패 사례" if is_retry else "서빙 프레임워크 지연시간 메모리")
+            if spec is None:
+                paper_focus, web_focus = _LEGACY_QUERIES[COUNTER if self.focus(state) == COUNTER else "base"]
+                paper_query = self.rewrite_query(f"{tech.name} {domain} {paper_focus}", tech.name)
+                web_query = f"{tech.name} {tech.search_anchor} {domain} {web_focus}"
+            else:
+                paper_query = self.rewrite_query(spec.paper.format(tech=tech.name, domain=domain), tech.name)
+                web_query = spec.web[0][0].format(tech=tech.name, anchor=tech.search_anchor)
             self.last_queries[tech.name] = {"paper": paper_query, "web": web_query}
 
             paper_docs = _rerank_experiment_first(self.index, paper_query, k=config.DEFAULT_TOP_K, role="target", tech=tech.name)
@@ -133,14 +145,14 @@ class DomainEvalAgent(BaseAgent):
             # 재검색 시 1차 결과의 미확인 항목만 이어받음(7.4절 Context 및 Memory)
             prior_unconfirmed = (
                 list(prior.by_tech[tech.name].unconfirmed_items)
-                if is_retry and prior is not None and tech.name in prior.by_tech
+                if followup and prior is not None and tech.name in prior.by_tech
                 else None
             )
             view = extract_view_result(
                 passages,
                 tech.name,
                 PERSPECTIVE_LABEL,
-                REQUIRED_ITEMS,
+                required,
                 key_by_num,
                 extra_instructions=EXTRA_INSTRUCTIONS.format(domain=domain),
                 prior_unconfirmed=prior_unconfirmed,
