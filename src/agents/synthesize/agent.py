@@ -169,34 +169,44 @@ class SynthesizeAgent(BaseAgent):
         confidence = state.get("perspective_confidence", {})
         overall_confidence, weakest_perspective = _aggregate_confidence(confidence)
 
+        tech_pair = "와 ".join(f"{t.name}({t.camp})" for t in state.get("techs", []) or []) or "두 기술"
         prompt = _PROMPT_TEMPLATE.format(
-            trl_result=state.get("trl_result"),
-            market_result=state.get("market_result"),
-            stakeholder_result=state.get("stakeholder_result"),
-            domain_result=state.get("domain_result"),
+            tech_pair=tech_pair,
+            views=format_views(state),
             confidence=confidence,
         )
 
         feedback = state.get("judge_feedback")
-        is_rewrite = feedback is not None
-        if is_rewrite:
+        if feedback is not None:
             prompt += f"\n[이전 검수에서 지적된 사항, 반드시 반영할 것]\n{feedback}"
+        # 보고서 품질 평가(quality_eval)가 서술 문제로 되돌려 보낸 경우의 지적 사항
+        verdict = state.get("eval_result")
+        eval_issues = verdict.issues_for("groundedness", "neutrality") if verdict is not None and not verdict.passed else []
+        if eval_issues:
+            listed = "\n".join(f"- {i}" for i in eval_issues)
+            prompt += f"\n[보고서 품질 평가에서 지적된 사항, 반드시 반영할 것]\n{listed}"
+        is_rewrite = feedback is not None or bool(eval_issues)
 
         # 동적 confidence dictionary는 코드에서 조립하고, LLM에는 고정 스키마인
         # 서술 부분만 요청한다.
-        llm = get_generation_llm().with_structured_output(_SynthesisNarrative)
-        narrative: _SynthesisNarrative = llm.invoke(prompt)  # type: ignore[assignment]
+        llm = get_generation_llm().with_structured_output(_SynthesisDraft)
+        draft: _SynthesisDraft = llm.invoke(prompt)  # type: ignore[assignment]
+        valid_ids = {e.id for e in state.get("evidence", []) or [] if e.id is not None}
+        agreements, conflicts, summary, dropped = assemble_synthesis(draft, valid_ids)
+        if dropped:
+            log_decision(
+                state.get("trace_id"), self.name, "drop_uncited",
+                f"근거 번호가 없거나 실제 근거가 아닌 문장 {dropped}개를 종합에서 제외",
+            )
         synthesis = Synthesis(
-            agreements=narrative.agreements,
-            conflicts=narrative.conflicts,
-            summary=narrative.summary,
+            agreements=agreements,
+            conflicts=conflicts,
+            summary=summary,
             perspective_confidence=confidence,
             overall_confidence=overall_confidence,
             weakest_perspective=weakest_perspective,
         )
 
         # 12장 "반복 2" 예산(1회)을 그래프 조건 분기가 확인할 수 있게 재작성 횟수를 기록함
-        rewrite_count = state.get("rewrite_count", 0)
-        if feedback is not None and rewrite_count < 1:
-            rewrite_count += 1
+        rewrite_count = state.get("rewrite_count", 0) + (1 if is_rewrite else 0)
         return {"synthesis": synthesis, "rewrite_count": rewrite_count}
