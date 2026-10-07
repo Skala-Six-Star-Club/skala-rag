@@ -92,21 +92,43 @@ class ViewResult(BaseModel):
     기술명 -> TechViewResult로 두 기술을 나란히 담음."""
 
     by_tech: dict[str, TechViewResult] = Field(default_factory=dict)
+    # True면 reducer가 by_tech의 해당 기술을 통째로 교체함(evidence_check 그라운딩 필터,
+    # evidence_finalize 번호 확정처럼 이미 병합된 결과를 다시 쓰는 경우). False(worker
+    # 출력)면 같은 기술의 기존 결과 뒤에 이어 붙임.
+    replace: bool = False
+
+
+def _append_tech_view(left: TechViewResult, right: TechViewResult) -> TechViewResult:
+    def _claims(a: list[Claim], b: list[Claim]) -> list[Claim]:
+        seen = {(c.statement, tuple(c.evidence_keys), tuple(c.evidence_ids)) for c in a}
+        return [*a, *(c for c in b if (c.statement, tuple(c.evidence_keys), tuple(c.evidence_ids)) not in seen)]
+
+    return TechViewResult(
+        confirmed_facts=_claims(left.confirmed_facts, right.confirmed_facts),
+        counter_facts=_claims(left.counter_facts, right.counter_facts),
+        unconfirmed_items=list(dict.fromkeys([*left.unconfirmed_items, *right.unconfirmed_items])),
+    )
 
 
 def merge_view_results(left: ViewResult | None, right: ViewResult | None) -> ViewResult:
-    """관점 결과 reducer. 같은 관점 노드가 (관점, 기술) 단위로 병렬 실행되면(graph.py의
-    Send fan-out) 두 실행이 같은 superstep에 각각 한 기술의 ViewResult를 돌려주므로,
-    덮어쓰기 대신 by_tech를 기술 키로 합침. 같은 기술은 나중 값(재검색 결과)이 이김.
-    evidence_check가 그라운딩 필터를 거친 결과를 되돌려 줄 때도 같은 규칙으로 반영됨."""
+    """관점 결과 reducer.
+
+    orchestrator가 같은 (관점, 기술)에 초점이 다른 서브 태스크를 여러 개 만들면 같은
+    superstep에서 같은 기술 키로 결과가 여러 번 들어오므로, 기술 키가 겹치면 덮어쓰지
+    않고 이어 붙임. ``replace=True``인 갱신(그라운딩 필터, 번호 확정)만 교체함.
+    """
     if right is None:
         return left if left is not None else ViewResult()
-    if left is None:
-        return right if isinstance(right, ViewResult) else ViewResult.model_validate(right)
-    left = left if isinstance(left, ViewResult) else ViewResult.model_validate(left)
     right = right if isinstance(right, ViewResult) else ViewResult.model_validate(right)
+    if left is None:
+        return ViewResult(by_tech=dict(right.by_tech))
+    left = left if isinstance(left, ViewResult) else ViewResult.model_validate(left)
     merged = dict(left.by_tech)
-    merged.update(right.by_tech)
+    for tech, view in right.by_tech.items():
+        if right.replace or tech not in merged:
+            merged[tech] = view
+        else:
+            merged[tech] = _append_tech_view(merged[tech], view)
     return ViewResult(by_tech=merged)
 
 
