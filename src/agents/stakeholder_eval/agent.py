@@ -54,16 +54,20 @@ class StakeholderEvalAgent(BaseAgent):
         if not state.get("tech_scope"):
             self.last_queries = {}
             self.last_queries_used = {}
-        is_retry = self.name in (state.get("retry_targets") or [])
-        ko_templates = _RETRY_TEMPLATES if is_retry else _QUERY_TEMPLATES
-        en_templates = _RETRY_TEMPLATES_EN if is_retry else _QUERY_TEMPLATES_EN
+        spec = self.focus_spec(state, "stakeholder")
+        if spec is None:
+            pairs = FOCI["stakeholder"][COUNTER].web if self.focus(state) == COUNTER else tuple(zip(_QUERY_TEMPLATES, _QUERY_TEMPLATES_EN))
+            required = REQUIRED_ITEMS
+        else:
+            pairs, required = spec.web, list(spec.items)
+        max_results = MAX_RESULTS_PER_QUERY if len(pairs) > 1 else SINGLE_QUERY_MAX_RESULTS
 
         for tech in techs:
             passages: list[str] = []
             key_by_num: dict[int, str] = {}
             self.last_queries[tech.name] = []
             self.last_queries_used[tech.name] = []
-            for template, template_en in zip(ko_templates, en_templates):
+            for template, template_en in pairs:
                 query = template.format(tech=tech.name, anchor=tech.search_anchor)
                 self.last_queries[tech.name].append(query)
                 ladder = [
@@ -71,7 +75,7 @@ class StakeholderEvalAgent(BaseAgent):
                     template_en.format(tech=tech.name, anchor=tech.search_anchor),
                     template.format(tech=tech.name, anchor="").replace("  ", " ").strip(),
                 ]
-                results, used = web_search_ladder(ladder, max_results=MAX_RESULTS_PER_QUERY)
+                results, used = web_search_ladder(ladder, max_results=max_results)
                 self.last_queries_used[tech.name].append(used)
                 for r in results:
                     ev = self.new_evidence(
@@ -90,13 +94,13 @@ class StakeholderEvalAgent(BaseAgent):
                 # 사다리 전부 0건: 근거 없이 판단하지 않고 미확인으로 명시함. 근거 0건은
                 # evidence_check(7.7)가 재검색 대상으로 잡고, 재검색도 0건이면 보고서
                 # 한계점에 그대로 드러남(12장 "예산 소진 시 미확인 상태로 진행").
-                print(f"[{self.name}] {tech.name}: 웹 검색 결과 0건 (질의 {len(ladder) * len(ko_templates)}종 시도)")
+                print(f"[{self.name}] {tech.name}: 웹 검색 결과 0건 (질의 {len(ladder) * len(pairs)}종 시도)")
                 by_tech[tech.name] = TechViewResult(
-                    unconfirmed_items=[*REQUIRED_ITEMS, f"웹 검색 결과 없음: {', '.join(self.last_queries[tech.name])}"]
+                    unconfirmed_items=[*required, f"웹 검색 결과 없음: {', '.join(self.last_queries[tech.name])}"]
                 )
                 continue
             view = extract_view_result(
-                passages, tech.name, PERSPECTIVE_LABEL, REQUIRED_ITEMS, key_by_num
+                passages, tech.name, PERSPECTIVE_LABEL, required, key_by_num
             )
             by_tech[tech.name] = view
 
