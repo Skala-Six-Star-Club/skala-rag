@@ -61,6 +61,12 @@ _FONT_PATH = Path(__file__).resolve().parents[3] / "assets" / "fonts" / "NanumGo
 _FONT_ALIAS = "NanumGothic-Regular.ttf"
 
 _PERSPECTIVE_ORDER = ("trl", "market", "stakeholder", "domain")
+_NO_POLISH_SECTIONS = {"SUMMARY", "5. 시사점"}
+# 보고서 분량(10장 상한) 관리. 미확인 항목은 칸당, 한계점 절 전체에서 앞쪽만 싣고 나머지는 건수로 표기
+_MAX_UNCONFIRMED_PER_CELL = 3
+_MAX_UNCONFIRMED_TOTAL = 10
+# 나눔고딕에 글리프가 없는 한자, CJK 문장부호. 웹 자료 제목에 섞이면 PDF에서 빈 상자로 찍혀 PDF 변환 때만 지움
+_UNRENDERABLE_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3000-\u303f\uff01-\uff0f\uff1a-\uff20]+")
 _PERSPECTIVE_LABELS = {
     "trl": "기술 성숙도 (TRL, 공개 정보 기반 추정)",
     "market": "시장성",
@@ -320,15 +326,56 @@ def render_tech_overview(tech_profiles: dict[str, TechProfile]) -> str:
     return "\n\n".join(parts)
 
 
-def _render_tech_view(tech_name: str, view: TechViewResult | None) -> str:
+def _select_claims(
+    view: TechViewResult, limit: int, source_of: dict[int, str] | None = None
+) -> tuple[list, list]:
+    """칸당 주장 수를 limit으로 줄임. 보고서 분량(10장 상한)을 지키기 위한 장치.
+
+    - 반대 사실을 최소 1/3 남겨 지지 쪽으로만 기울지 않게 함
+    - 같은 문장이 반복되면 하나만 남김
+    - source_of(근거 번호 -> 출처)가 있으면 아직 실리지 않은 출처를 인용한 주장부터 고름.
+      앞에서부터 자르면 같은 논문만 인용한 주장만 남아 단일 출처 편중이 생김
+    선택한 주장은 원래 순서대로 돌려줌.
+    """
+    def _dedupe(claims):
+        seen: set[str] = set()
+        return [c for c in claims if not (c.statement.strip() in seen or seen.add(c.statement.strip()))]
+
+    confirmed, counter = _dedupe(view.confirmed_facts), _dedupe(view.counter_facts)
+    if limit <= 0 or len(confirmed) + len(counter) <= limit:
+        return confirmed, counter
+    n_counter = min(len(counter), max(1, limit // 3))
+    n_confirmed = min(len(confirmed), limit - n_counter)
+    n_counter = min(len(counter), limit - n_confirmed)
+
+    covered: set[str] = set()
+
+    def _sources(claim) -> set[str]:
+        return {source_of[i] for i in claim.evidence_ids if source_of and i in source_of}
+
+    def _pick(claims: list, n: int) -> list:
+        remaining = list(enumerate(claims))
+        chosen: list[tuple[int, object]] = []
+        while remaining and len(chosen) < n:
+            best = max(remaining, key=lambda item: (len(_sources(item[1]) - covered), -item[0]))
+            remaining.remove(best)
+            chosen.append(best)
+            covered.update(_sources(best[1]))
+        return [c for _, c in sorted(chosen, key=lambda item: item[0])]
+
+    return _pick(confirmed, n_confirmed), _pick(counter, n_counter)
+
+
+def _render_tech_view(tech_name: str, view: TechViewResult | None, source_of: dict[int, str] | None = None) -> str:
     """기술 하나의 관점 결과를 확인/반대/미확인 항목으로 렌더링. 모든 Claim에 근거 번호를 붙임."""
     lines = [f"**{tech_name}**"]
     if view is None:
         lines.append("- (평가 결과 없음)")
         return "\n".join(lines)
-    for claim in view.confirmed_facts:
+    confirmed, counter = _select_claims(view, config.REPORT_MAX_CLAIMS_PER_CELL, source_of)
+    for claim in confirmed:
         lines.append(f"- (확인) {claim.statement.strip()}{_cite(claim.evidence_ids)}")
-    for claim in view.counter_facts:
+    for claim in counter:
         lines.append(f"- (반대) {claim.statement.strip()}{_cite(claim.evidence_ids)}")
     if view.unconfirmed_items:
         lines.append("- 미확인 항목: " + "; ".join(i.strip() for i in view.unconfirmed_items))
@@ -343,8 +390,11 @@ def render_view_evaluation(
     stakeholder_result: ViewResult | None,
     domain_result: ViewResult | None,
     techs: list[TechSpec],
+    evidence: list[Evidence] | None = None,
 ) -> str:
     """4개 관점을 순서대로, 관점마다 두 기술을 나란히 서술(9.5절, 13장)."""
+    # 근거 번호 -> 출처(참고문헌 URL). 칸당 주장을 고를 때 출처 다양성을 보려고 씀
+    source_of = {e.id: e.reference_url or e.source for e in evidence or [] if e.id is not None}
     results = {
         "trl": trl_result,
         "market": market_result,
@@ -357,7 +407,7 @@ def render_view_evaluation(
         block = [f"### 4.{idx} {_PERSPECTIVE_LABELS[key]}"]
         for name in _tech_names(techs):
             view = result.by_tech.get(name) if result is not None else None
-            block.append(_render_tech_view(name, view))
+            block.append(_render_tech_view(name, view, source_of))
         parts.append("\n\n".join(block))
     return "\n\n".join(parts)
 
@@ -556,7 +606,7 @@ class ReportAgent(BaseAgent):
             "1. 분석 배경": render_background(techs, tech_profiles),
             "2. 기술 선정": render_tech_selection(techs),
             "3. 기술 개요": render_tech_overview(tech_profiles),
-            "4. 관점별 평가": render_view_evaluation(*view_results, techs),
+            "4. 관점별 평가": render_view_evaluation(*view_results, techs, state.get("evidence", [])),
             "5. 시사점": render_implications(synthesis),
             "6. 한계점": render_limitations(judge_feedback, collect_unconfirmed_items(*view_results)),
         }
