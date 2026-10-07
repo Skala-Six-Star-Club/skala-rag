@@ -265,3 +265,30 @@ class AgentState(TypedDict, total=False):
     # 보고서 본문은 파일로만 두고 State에는 경로만 둠(체크포인트 크기 관리)
     report_path: str
     report_json_path: str
+
+    # -- 제어 메타데이터 (조정, 종료, 재개에 필요한 최소치) ------------------------
+    trace_id: str  # 외부 로그, LangSmith 메타데이터, 체크포인트 thread_id와 잇는 상관 키
+    run_id: str  # LangSmith 루트 run id(실행 1회). 재개하면 새 run id가 결정 로그에 남음
+    plan: Plan  # 현재 round의 계획. 다음 re-plan이 덮어씀
+    planned_subtasks: Annotated[list[SubTask], operator.add]  # 모든 round에서 계획된 서브 태스크
+    plan_round: int
+    pending_gaps: list[Gap]  # orchestrator가 다음 round에서 처리할 부족 칸
+    excluded_subtasks: Annotated[list[SubTask], operator.add]  # Fall-back으로 제외된 작업
+
+    # Send payload 전용. worker 하나가 맡은 서브 태스크와 기술명
+    subtask: SubTask
+    tech_scope: str
+
+    retry_targets: list[str]
+    retry_scopes: dict[str, list[str]]
+    retry_count: int
+    rewrite_count: int
+    eval_count: int
+    quality_replan_count: int  # quality_eval이 orchestrator 재계획을 요청한 횟수
+    quality_rewrite_count: int  # quality_eval이 synthesize 재작성을 요청한 횟수
+    evidence_finalized: bool
+
+    node_status: Annotated[dict[str, str], merge_dicts]  # subtask_id -> pending(계획), done, excluded
+    task_errors: Annotated[dict[str, str], merge_dicts]  # subtask_id -> 마지막 오류. 재개 시 실패 원인 확인용
+    last_error: Annotated[str | None, keep_last]
+    step_count: Annotated[int, operator.add]  # 노드 실행 수. 종료 가드
