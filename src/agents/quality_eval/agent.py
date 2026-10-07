@@ -109,3 +109,22 @@ def load_report_json(path: str | Path | None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # 규칙 판정. LLM과 임베딩 없이 단위 테스트할 수 있게 순수 함수로 둠
 # ---------------------------------------------------------------------------
+
+
+def check_coverage(sections: dict[str, str], evidence_by_id: dict[int, Evidence], techs: list[str]) -> tuple[CriterionResult, list[Gap]]:
+    cited = [evidence_by_id[i] for i in _cited_ids(sections.get(_VIEW_SECTION, "")) if i in evidence_by_id]
+    present = {(e.perspective, e.tech) for e in cited}
+    missing = [(p, t) for p in _PERSPECTIVES for t in techs if (p, t) not in present]
+    gaps = [
+        Gap(perspective=p, tech=t, reason="보고서 관점별 평가에 인용 근거 없음", source="quality_eval")
+        for p, t in missing
+    ]
+    return (
+        CriterionResult(
+            name="coverage",
+            passed=not missing,
+            method="rule",
+            issues=[f"{p}/{t}: 관점별 평가에 인용 근거 없음" for p, t in missing],
+        ),
+        gaps,
+    )
