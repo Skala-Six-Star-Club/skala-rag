@@ -103,3 +103,18 @@ REPORT_CITATION_STYLE = os.getenv("REPORT_CITATION_STYLE", "numeric").strip().lo
 # 관점별 평가 절에서 (관점, 기술) 칸당 싣는 주장 수 상한. 보고서 10장 상한을 지키기 위함(0이면 제한 없음)
 REPORT_MAX_CLAIMS_PER_CELL = int(os.getenv("REPORT_MAX_CLAIMS_PER_CELL", "5"))
 
+# Orchestrator-Workers
+# orchestrator 모드: llm(기본, 생성 LLM이 칸별 초점을 고르고 계획 검증이 대칭, 커버리지, 상한을 보정) / rule(칸마다 기본 초점 하나)
+PLANNER_MODE = os.getenv("PLANNER_MODE", "llm").strip().lower()
+# 한 round의 서브 태스크 상한. 계획 검증이 칸마다 최소 1개를 보장하므로 관점 4 x 기술 N개 이상이어야 함
+MAX_SUBTASKS = int(os.getenv("MAX_SUBTASKS", "16"))
+# worker 실패 시 같은 서브 태스크 재시도 횟수. 소진하면 제외하고 보고서 한계점에 기록
+WORKER_MAX_RETRIES = int(os.getenv("WORKER_MAX_RETRIES", "1"))
+# 품질 평가 미달 시 Loop 예산. 조사 부족(커버리지, 편향 통제)의 재계획과 서술 문제(Groundedness,
+# 중립성)의 재작성을 따로 셈. 한쪽 예산을 쓴 뒤에도 다른 쪽 문제를 고칠 기회가 남음
+MAX_QUALITY_REPLANS = int(os.getenv("MAX_QUALITY_REPLANS", "1"))
+MAX_QUALITY_REWRITES = int(os.getenv("MAX_QUALITY_REWRITES", "1"))
+# 노드 실행 수 상한(종료 가드). 넘으면 남은 Loop를 건너뛰고 종료 쪽으로 진행
+MAX_STEPS = int(os.getenv("MAX_STEPS", "80"))
+RECURSION_LIMIT = int(os.getenv("RECURSION_LIMIT", "100"))
+
