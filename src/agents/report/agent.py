@@ -329,7 +329,10 @@ def _render_tech_view(tech_name: str, view: TechViewResult | None) -> str:
     for claim in view.counter_facts:
         lines.append(f"- (반대) {claim.statement.strip()}{_cite(claim.evidence_ids)}")
     if view.unconfirmed_items:
-        lines.append("- 미확인 항목: " + "; ".join(i.strip() for i in view.unconfirmed_items))
+        items = list(dict.fromkeys(i.strip() for i in view.unconfirmed_items))
+        shown = "; ".join(items[:_MAX_UNCONFIRMED_PER_CELL])
+        more = f" 외 {len(items) - _MAX_UNCONFIRMED_PER_CELL}건" if len(items) > _MAX_UNCONFIRMED_PER_CELL else ""
+        lines.append(f"- 미확인 항목: {shown}{more}")
     if len(lines) == 1:
         lines.append("- (확인된 사실 없음)")
     return "\n".join(lines)
