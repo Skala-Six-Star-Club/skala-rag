@@ -24,144 +24,52 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+import uuid
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from langchain_community.vectorstores import FAISS
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Send
 
 from src.common import config
-from src.common.doc_pool import DOC_POOL_SPECS
-from src.common.state import AgentState, JudgeFeedback
+from src.common.observability import log_decision, new_trace_id, read_decisions, run_config
+from src.common.state import AgentState
+from src.orchestration.routing import (
+    NODE_EVIDENCE_CHECK,
+    NODE_EVIDENCE_FINALIZE,
+    NODE_ORCHESTRATOR,
+    NODE_QUALITY_EVAL,
+    NODE_REPORT,
+    NODE_SELECT_TECH,
+    NODE_SYNTHESIZE,
+    NODE_TECH_RESEARCH,
+    VIEW_NODES,
+    fan_out_plan,
+    route_after_evidence_check,
+    route_after_quality,
+)
+from src.orchestration.worker import NodeFn, wrap_node, with_fallback
 
-# 12장 그림의 노드 이름. 각 agent.py의 `name` 속성과 반드시 일치해야 함
-# (evidence_check가 retry_targets에 이 이름을 그대로 넣고, 그래프가 그 이름으로 라우팅함).
-NODE_SELECT_TECH = "select_tech"
-NODE_TECH_RESEARCH = "tech_research"
-NODE_EVIDENCE_CHECK = "evidence_check"
-NODE_EVIDENCE_FINALIZE = "evidence_finalize"
-NODE_SYNTHESIZE = "synthesize"
-NODE_JUDGE = "judge"
-NODE_REPORT = "report"
-VIEW_NODES: tuple[str, ...] = ("trl_eval", "market_eval", "stakeholder_eval", "domain_eval")
 ALL_NODES: tuple[str, ...] = (
     NODE_SELECT_TECH,
     NODE_TECH_RESEARCH,
+    NODE_ORCHESTRATOR,
     *VIEW_NODES,
     NODE_EVIDENCE_CHECK,
     NODE_EVIDENCE_FINALIZE,
     NODE_SYNTHESIZE,
-    NODE_JUDGE,
     NODE_REPORT,
+    NODE_QUALITY_EVAL,
 )
 
-# 12장 "반복 1·2는 1회 한정". 그래프 쪽 안전장치용 상한(실제 예산 관리는 노드가 함).
-MAX_RETRY = 1
-MAX_REWRITE = 1
 
-NodeFn = Callable[[AgentState], dict[str, Any]]
+def build_graph(nodes: dict[str, NodeFn], checkpointer: Any | None = None) -> CompiledStateGraph:
+    """노드 이름 -> 노드 함수 dict를 받아 그래프를 조립함.
 
-
-def _normalize_parallel_update(node_name: str, node: NodeFn) -> NodeFn:
-    """구 에이전트의 ``evidence`` 반환을 raw 누적 영역으로 호환 변환한다.
-
-    새 노드는 ``raw_evidence``를 반환하지만, 독립 실행 스크립트나 외부 팀 코드가
-    예전 계약인 ``evidence``를 반환할 수 있다. Graph에서는 최종화 노드만 확정
-    ``evidence``를 쓰므로, 업무 노드의 레거시 반환은 reducer 영역으로 옮긴다.
-    """
-
-    if node_name == NODE_EVIDENCE_FINALIZE:
-        return node
-
-    def normalized(state: AgentState) -> dict[str, Any]:
-        update = dict(node(state))
-        if "evidence" in update:
-            update.setdefault("raw_evidence", update["evidence"])
-            update.pop("evidence", None)
-        if "references" in update:
-            update.setdefault("raw_references", update["references"])
-            update.pop("references", None)
-        return update
-
-    return normalized
-
-
-# ---------------------------------------------------------------------------
-# 조건 분기 (12장 표 "반복 1", "반복 2", "조건 분기")
-# ---------------------------------------------------------------------------
-
-
-def _send_view(node: str, state: AgentState, tech: str) -> Send:
-    """관점 노드를 (관점, 기술) 단위로 호출하는 Send. 노드는 payload를 state로 받으므로
-    전체 state에 tech_scope만 얹어 보냄(BaseAgent.scoped_techs가 이 값으로 기술을 고름)."""
-    return Send(node, {**state, "tech_scope": tech})
-
-
-def fan_out_views(state: AgentState) -> list[Send]:
-    """tech_research 뒤: 관점 노드 4개 x 기술 N개를 같은 superstep에서 병렬 실행함.
-
-    노드 단위(4개)가 아니라 (관점, 기술) 단위(4 x N)로 나누는 이유는 (1) 기술별 검색과
-    LLM 호출이 서로 독립이라 실행 시간이 기술 수만큼 줄고, (2) 반복 1에서 부족한
-    기술만 골라 재검색할 수 있기 때문(evidence_check의 retry_scopes). 관점 결과는
-    state.merge_view_results reducer가 기술 키로 합침.
-    """
-    techs = [t.name for t in state.get("techs", []) or []]
-    return [_send_view(view, state, tech) for view in VIEW_NODES for tech in techs]
-
-
-def route_after_evidence_check(state: AgentState) -> list[Send] | str:
-    """evidence_check 뒤: 부족한 (관점, 기술)만 재검색하거나 evidence_finalize로.
-
-    evidence_check(7.7)가 retry_targets(노드)와 retry_scopes(노드 -> 부족한 기술)를
-    채움. scopes에 없는 노드는 전체 기술을 다시 검색함(구 evidence_check 호환).
-    예산을 소진했으면 retry_targets가 비어 오고 ID 최종화로 진행함. retry_count가
-    상한을 넘었는데도 targets가 남아 있는 비정상 상황은 무한 루프 대신 최종화로
-    진행시킴(12장 "조건 분기").
-    """
-    targets = [t for t in (state.get("retry_targets") or []) if t in VIEW_NODES]
-    if targets and state.get("retry_count", 0) <= MAX_RETRY:
-        all_techs = [t.name for t in state.get("techs", []) or []]
-        scopes = state.get("retry_scopes") or {}
-        return [
-            _send_view(node, state, tech)
-            for node in targets
-            for tech in (scopes.get(node) or all_techs)
-        ]
-    return NODE_EVIDENCE_FINALIZE
-
-
-def judge_found_violation(feedback: JudgeFeedback | None) -> bool:
-    """7.9의 세 검사 항목 중 하나라도 걸리면 위반(12장 그림 "위반 발견")."""
-    if feedback is None:
-        return False
-    return (
-        feedback.has_biased_expression
-        or bool(feedback.sentences_without_evidence)
-        or not feedback.is_balanced
-    )
-
-
-def route_after_judge(state: AgentState) -> str:
-    """judge 뒤: 위반이 있고 재작성 예산이 남았으면 synthesize, 아니면 report."""
-    if judge_found_violation(state.get("judge_feedback")) and state.get("rewrite_count", 0) < MAX_REWRITE:
-        return NODE_SYNTHESIZE
-    return NODE_REPORT
-
-
-# ---------------------------------------------------------------------------
-# 그래프 조립
-# ---------------------------------------------------------------------------
-
-
-def build_graph(nodes: dict[str, NodeFn]) -> CompiledStateGraph:
-    """노드 이름 -> 노드 함수 dict를 받아 12장 그래프를 조립함.
-
-    노드 함수는 `BaseAgent` 인스턴스(호출 가능) 또는 같은 계약의 아무 callable이면 됨.
-    실제 에이전트 대신 stub을 넣으면 API 키·Doc Pool 없이 그래프 흐름만 검증할 수 있음
-    (`make_agents()`가 실제 에이전트 10개를 만들어 줌).
+    노드 함수는 ``BaseAgent`` 인스턴스 또는 같은 계약의 callable. stub을 넣으면 API 키와
+    Doc Pool 없이 흐름만 검증할 수 있음(scripts/graph_flow_check.py).
     """
     missing = [n for n in ALL_NODES if n not in nodes]
     if missing:
@@ -169,37 +77,32 @@ def build_graph(nodes: dict[str, NodeFn]) -> CompiledStateGraph:
 
     graph = StateGraph(AgentState)
     for name in ALL_NODES:
-        graph.add_node(name, _normalize_parallel_update(name, nodes[name]))
+        node = nodes[name]
+        if name in VIEW_NODES:
+            node = with_fallback(name, node)
+        graph.add_node(name, wrap_node(name, node, finalizer=name == NODE_EVIDENCE_FINALIZE))
 
-    # 순차: 기술 조사가 끝나야 네 관점이 같은 사실 위에서 출발함
     graph.add_edge(START, NODE_SELECT_TECH)
     graph.add_edge(NODE_SELECT_TECH, NODE_TECH_RESEARCH)
+    graph.add_edge(NODE_TECH_RESEARCH, NODE_ORCHESTRATOR)
 
-    # 병렬 분기: (관점, 기술) 단위 Send fan-out + 합류 (모듈 docstring 참고)
-    graph.add_conditional_edges(NODE_TECH_RESEARCH, fan_out_views, list(VIEW_NODES))
+    # Dynamic Fan-out: 계획된 서브 태스크마다 worker 하나
+    graph.add_conditional_edges(NODE_ORCHESTRATOR, fan_out_plan, [*VIEW_NODES, NODE_EVIDENCE_FINALIZE])
+    # 합류: 같은 superstep의 Send가 모두 끝난 뒤 evidence_check가 1회 실행됨. re-plan에서는
+    # 일부 관점만 실행되므로 barrier 합류(add_edge([...], ...))를 쓰지 않음
     for view in VIEW_NODES:
         graph.add_edge(view, NODE_EVIDENCE_CHECK)
 
-    # 반복 1: 부족한 (관점, 기술)만 재검색, 아니면 종합으로
     graph.add_conditional_edges(
-        NODE_EVIDENCE_CHECK,
-        route_after_evidence_check,
-        [*VIEW_NODES, NODE_EVIDENCE_FINALIZE],
+        NODE_EVIDENCE_CHECK, route_after_evidence_check, [NODE_ORCHESTRATOR, NODE_EVIDENCE_FINALIZE]
     )
-
-    # 재시도까지 끝난 뒤에만 임시 Evidence key를 최종 정수 ID로 확정한다.
     graph.add_edge(NODE_EVIDENCE_FINALIZE, NODE_SYNTHESIZE)
-
-    # 반복 2: 위반 시 재작성, 아니면 보고서로
-    graph.add_edge(NODE_SYNTHESIZE, NODE_JUDGE)
+    graph.add_edge(NODE_SYNTHESIZE, NODE_REPORT)
+    graph.add_edge(NODE_REPORT, NODE_QUALITY_EVAL)
     graph.add_conditional_edges(
-        NODE_JUDGE,
-        route_after_judge,
-        [NODE_SYNTHESIZE, NODE_REPORT],
+        NODE_QUALITY_EVAL, route_after_quality, [NODE_ORCHESTRATOR, NODE_SYNTHESIZE, END]
     )
-
-    graph.add_edge(NODE_REPORT, END)
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 # ---------------------------------------------------------------------------
