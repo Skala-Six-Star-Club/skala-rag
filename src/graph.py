@@ -1,37 +1,23 @@
-"""LangGraph 그래프 조립. docs/agentic-rag-design.md 12장 Graph 설계를 그대로 구현함.
+"""LangGraph 그래프 조립. Orchestrator-Workers 패턴.
 
-이 파일은 10개 비즈니스 에이전트 **공통**으로 하나만 존재함. 각 `src/agents/{agent}/agent.py`는
-`BaseAgent.run(state) -> dict` 계약만 지키는 노드이고, 그 노드들을 어떤 순서·조건으로
-잇는지는 전부 여기서 정함. 에이전트별 `scripts/{agent}/test_runner.py`는 그래프 없이
-노드 하나만 따로 돌리므로 이 파일과 무관함(schedule.md 2절). 이 파일은 전 에이전트가
-붙은 뒤의 "통합 실행"(schedule.md 1절, 8.3 Agent System 지표)에 쓰임.
+    select_tech -> tech_research -> orchestrator --(Send x 계획된 서브 태스크 수)--> [trl | market | stakeholder | domain]_eval
+        -> evidence_check --(부족한 (관점, 기술), 재검색 1회)--> orchestrator (re-plan)
+                          --(충족 또는 소진)--> evidence_finalize -> synthesize -> report -> quality_eval
+        quality_eval --(coverage, bias_control 미달)--> orchestrator
+                     --(groundedness, neutrality 미달)--> synthesize
+                     --(통과 또는 Loop 상한)--> END
 
-    select_tech -> tech_research -> Send x (관점 4 x 기술 N): [trl_eval | market_eval | stakeholder_eval | domain_eval]
-        -> evidence_check --(근거 부족, 재시도 0회)--> 부족한 (관점, 기술)만 Send로 다시 -> evidence_check
-        -> evidence_finalize -> synthesize -> judge --(위반 발견, 재작성 0회)--> synthesize
-        -> report
+패턴 필수 항목과 코드 위치
+- 서브 태스크 목록의 구조화와 State 저장: ``orchestration/orchestrator.py``가 ``Plan``을 ``plan``에 씀
+- Dynamic Fan-out: ``orchestration/routing.fan_out_plan``이 계획된 서브 태스크 수만큼 Send를 만듦.
+  worker 수는 orchestrator 실행 전에는 정해지지 않음
+- 결과 누적과 집계: worker는 ``raw_evidence``(operator.add)와 관점 결과(merge_view_results)에
+  누적하고, ``evidence_finalize``가 번호를 확정한 뒤 ``synthesize``(synthesizer)가 집계함
+- Fall-back: ``orchestration/worker.with_fallback``이 1회 재시도 후 실패한 서브 태스크를 제외함
+- 종료 보장: 재검색 1회(retry_count), 품질 재계획 MAX_QUALITY_REPLANS회와 재작성 MAX_QUALITY_REWRITES회,
+  노드 실행 수 MAX_STEPS(step_count), recursion_limit
 
-구현 시 지킨 12장 규칙:
-- 병렬 분기: tech_research 뒤에 관점 노드 4개를 기술별로 나눠(Send, `fan_out_views`) 같은
-  superstep에서 동시 실행함. 각 호출은 전체 state에 `tech_scope`(기술명 하나)를 얹어 받고,
-  `BaseAgent.scoped_techs`가 그 기술만 처리함. 같은 관점 필드(`trl_result` 등)에 두 호출이
-  동시에 쓰므로 state.py의 `merge_view_results` reducer가 by_tech를 기술 키로 합침.
-- 합류: 관점 노드 4개 각각에서 evidence_check로 일반 edge를 둠. 같은 superstep에 실행된
-  노드들의 완료 신호는 다음 superstep에 한 번에 모이므로 evidence_check는 1회만 실행됨.
-  `add_edge([4개], "evidence_check")` 형태의 barrier 합류를 쓰지 않은 이유는, 반복 1에서
-  부족한 관점 노드만 재실행할 때 4개가 전부 도착하지 않아 evidence_check가 영영 깨어나지
-  않기 때문임.
-- 반복 1: evidence_check가 채운 `retry_targets`(노드 이름)와 `retry_scopes`(노드 -> 부족한
-  기술)로 부족한 (관점, 기술)만 Send로 재실행함. 각 관점 노드는 `self.name in
-  state["retry_targets"]`로 재검색 초점을 바꿈. 횟수 예산(1회)은 evidence_check가
-  `retry_count`로 관리하고, 그래프는 안전장치로 한 번 더 확인함.
-- Evidence ID 확정: evidence_check가 끝난 뒤 내부 finalizer가 임시 key를 정렬하고
-  연속 정수 ID를 부여한다. 이 노드는 비즈니스 에이전트 수에 포함하지 않는다.
-- 반복 2: judge_feedback에 위반이 있고 재작성 예산(1회)이 남아 있으면 synthesize로 돌아감.
-  재작성 횟수는 synthesize가 `rewrite_count`에 기록함.
-- 조건 분기: 예산 소진 시 부족한 항목을 미확인 상태로 둔 채 다음 단계로 진행함.
-
-실행: python -m src.graph
+실행: python app.py (또는 python -m src.graph)
 전제: .env(OPENAI_API_KEY, TAVILY_API_KEY), Ollama(qwen3:8b), data/doc_pool/*.pdf
 """
 
