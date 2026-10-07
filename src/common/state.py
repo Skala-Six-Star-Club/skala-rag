@@ -157,6 +157,79 @@ class JudgeFeedback(BaseModel):
     notes: str = ""
 
 
+ViewPerspective = Literal["trl", "market", "stakeholder", "domain"]
+
+
+class SubTask(BaseModel):
+    """orchestrator가 만드는 worker 실행 단위. (관점, 기술, 초점) 하나가 Send 하나임.
+    focus는 src/common/focus.py 카탈로그의 초점 id(관점 필수 항목 하나에 대응)."""
+
+    subtask_id: str
+    perspective: ViewPerspective
+    tech: str
+    focus: str
+    round: int = 0  # 0: 최초 계획, 1 이상: re-plan
+    reason: str = ""
+
+    @property
+    def node(self) -> str:
+        return f"{self.perspective}_eval"
+
+
+class Gap(BaseModel):
+    """re-plan 요청 한 건. evidence_check(근거 부족)나 quality_eval(커버리지, 편향 미달)이 씀."""
+
+    perspective: ViewPerspective
+    tech: str
+    focus: str | None = None  # None이면 orchestrator가 그 칸에서 아직 조사하지 않은 초점을 고름
+    reason: str = ""
+    source: Literal["evidence_check", "quality_eval"] = "evidence_check"
+
+
+class Plan(BaseModel):
+    """orchestrator 출력. 이번 round에 실행할 서브 태스크 목록과 계획 사유."""
+
+    round: int = 0
+    subtasks: list[SubTask] = Field(default_factory=list)
+    rationale: str = ""
+    # 계획 검증이 LLM 계획을 고친 내역(빈 칸 보정, 대칭 보정, 상한 조정 등)
+    corrections: list[str] = Field(default_factory=list)
+
+
+Criterion = Literal["groundedness", "neutrality", "bias_control", "coverage"]
+
+
+class CriterionResult(BaseModel):
+    name: Criterion
+    passed: bool
+    method: Literal["rule", "llm", "hybrid"]
+    issues: list[str] = Field(default_factory=list)
+
+
+class EvalVerdict(BaseModel):
+    """quality_eval 출력. 항목별 판정과 미달 시 되돌아갈 노드."""
+
+    passed: bool
+    criteria: list[CriterionResult] = Field(default_factory=list)
+    # 커버리지, 편향 미달은 orchestrator에 넘길 부족 칸
+    gaps: list[Gap] = Field(default_factory=list)
+    route: Literal["synthesize", "orchestrator", "end"] = "end"
+    attempt: int = 0
+
+    def issues_for(self, *names: str) -> list[str]:
+        return [i for c in self.criteria if c.name in names and not c.passed for i in c.issues]
+
+
+def merge_dicts(left: dict | None, right: dict | None) -> dict:
+    """병렬 worker가 같은 dict 필드(node_status)에 동시에 쓰는 갱신을 키 단위로 합침."""
+    return {**(left or {}), **(right or {})}
+
+
+def keep_last(left: str | None, right: str | None) -> str | None:
+    """병렬 갱신 중 마지막 값만 남김. 같은 superstep에서 여러 worker가 실패해도 충돌하지 않음."""
+    return right if right is not None else left
+
+
 class AgentState(TypedDict, total=False):
     """LangGraph 그래프 전체가 공유하는 State (11장 표)."""
 
