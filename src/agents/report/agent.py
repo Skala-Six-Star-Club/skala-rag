@@ -571,7 +571,7 @@ def convert_to_pdf(report_md: str, output_path: Path = _REPORT_PDF_PATH) -> bool
     try:
         with output_path.open("wb") as f:
             result = pisa.CreatePDF(
-                render_html(report_md),
+                render_html(_UNRENDERABLE_RE.sub("", report_md)),
                 dest=f,
                 encoding="utf-8",
                 link_callback=_resolve_font,
