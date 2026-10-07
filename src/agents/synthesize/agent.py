@@ -31,7 +31,9 @@ from pydantic import BaseModel, Field
 
 from src.common.models import get_generation_llm
 from src.common.base_agent import BaseAgent
-from src.common.state import AgentState, Conflict, Synthesis
+from src.common.observability import log_decision
+from src.common.state import AgentState, Claim, Conflict, Synthesis, ViewResult
+from src.common.tools import strip_citation_tokens
 
 _PROMPT_TEMPLATE = """\
 아래는 TurboQuant(SW)와 ITME(HW) 두 기술에 대한 4개 관점(기술 성숙도, 시장성,
@@ -53,17 +55,83 @@ _PROMPT_TEMPLATE = """\
 두 기술을 비교해 우열을 매기는 데는 쓰지 말 것.
 """
 
+_VIEW_LABELS = {
+    "trl_result": "기술 성숙도",
+    "market_result": "시장성",
+    "stakeholder_result": "이해관계자",
+    "domain_result": "도메인 적용",
+}
 
-class _SynthesisNarrative(BaseModel):
-    """LLM 구조화 출력용 서술 스키마.
+
+class _CitedSentence(BaseModel):
+    text: str
+    evidence_ids: list[int] = Field(default_factory=list)
+
+
+class _ConflictDraft(BaseModel):
+    topic: str
+    sentences: list[_CitedSentence] = Field(default_factory=list)
+
+
+class _SynthesisDraft(BaseModel):
+    """LLM 구조화 출력용 스키마. 문장마다 근거 번호를 따로 받아 코드가 검증하고 [근거#N]을 붙임.
 
     동적 dictionary인 perspective_confidence는 LLM Structured Outputs에 직접
     요청하지 않고, 코드가 Synthesis에 별도로 채운다.
     """
 
-    agreements: list[str] = Field(default_factory=list)
-    conflicts: list[Conflict] = Field(default_factory=list)
-    summary: str = ""
+    agreements: list[_CitedSentence] = Field(default_factory=list)
+    conflicts: list[_ConflictDraft] = Field(default_factory=list)
+    summary: list[_CitedSentence] = Field(default_factory=list)
+
+
+def format_views(state: AgentState) -> str:
+    """관점 결과 4종을 "(확인) 문장 (근거 3, 7)" 줄로 직렬화. LLM이 근거 번호를 그대로 옮길 수 있게 함."""
+    blocks = []
+    for key, label in _VIEW_LABELS.items():
+        result = state.get(key)
+        lines = [f"[{label}]"]
+        if result is not None:
+            result = result if isinstance(result, ViewResult) else ViewResult.model_validate(result)
+            for tech, view in result.by_tech.items():
+                for kind, claims in (("확인", view.confirmed_facts), ("반대", view.counter_facts)):
+                    for c in claims:
+                        c = c if isinstance(c, Claim) else Claim.model_validate(c)
+                        ids = ", ".join(map(str, c.evidence_ids)) or "없음"
+                        lines.append(f"- {tech} ({kind}) {c.statement.strip()} (근거 {ids})")
+                if view.unconfirmed_items:
+                    lines.append(f"- {tech} (미확인) " + "; ".join(view.unconfirmed_items[:5]))
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def render_sentence(sentence: _CitedSentence, valid_ids: set[int]) -> str | None:
+    """실제 근거 번호가 하나 이상 있는 문장만 "문장 [근거#3][근거#7]." 형태로 돌려줌. 없으면 None."""
+    ids = [i for i in dict.fromkeys(sentence.evidence_ids) if i in valid_ids]
+    text = strip_citation_tokens(sentence.text).strip().rstrip(".")
+    if not ids or not text:
+        return None
+    return f"{text} " + "".join(f"[근거#{i}]" for i in ids) + "."
+
+
+def assemble_synthesis(draft: _SynthesisDraft, valid_ids: set[int]) -> tuple[list[str], list[Conflict], str, int]:
+    """구조화 초안을 Synthesis 서술 필드로 조립. (일치점, 상충점, SUMMARY, 버린 문장 수)."""
+    dropped = 0
+
+    def keep(sentences: list[_CitedSentence]) -> list[str]:
+        nonlocal dropped
+        rendered = [render_sentence(s, valid_ids) for s in sentences]
+        dropped += sum(r is None for r in rendered)
+        return [r for r in rendered if r]
+
+    agreements = keep(draft.agreements)
+    conflicts = []
+    for c in draft.conflicts:
+        sentences = keep(c.sentences)
+        if sentences:
+            conflicts.append(Conflict(topic=c.topic.strip(), explanation=" ".join(sentences)))
+    summary = " ".join(keep(draft.summary))
+    return agreements, conflicts, summary, dropped
 
 
 def _aggregate_confidence(
