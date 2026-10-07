@@ -67,8 +67,11 @@ _NO_POLISH_SECTIONS = {"SUMMARY", "5. 시사점"}
 # 보고서 분량(10장 상한) 관리. 미확인 항목은 칸당, 한계점 절 전체에서 앞쪽만 싣고 나머지는 건수로 표기
 _MAX_UNCONFIRMED_PER_CELL = 3
 _MAX_UNCONFIRMED_TOTAL = 10
-# 나눔고딕에 글리프가 없는 한자, CJK 문장부호. 웹 자료 제목에 섞이면 PDF에서 빈 상자로 찍혀 PDF 변환 때만 지움
-_UNRENDERABLE_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3000-\u303f\uff01-\uff0f\uff1a-\uff20]+")
+# 나눔고딕에 글리프가 없는 한자, CJK 문장부호, 이모지. 웹 자료 제목에 섞이면 PDF에서 빈 상자로 찍혀 PDF 변환 때만 지움
+_UNRENDERABLE_RE = re.compile(
+    r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3000-\u303f\uff01-\uff0f\uff1a-\uff20"
+    r"\u2600-\u27bf\ufe0f\u200d\U0001f000-\U0001faff]+"
+)
 _PERSPECTIVE_LABELS = {
     "trl": "기술 성숙도 (TRL, 공개 정보 기반 추정)",
     "market": "시장성",
@@ -158,7 +161,8 @@ def polish_and_verify(raw_text: str, valid_ids: set[int]) -> str:
     polished = llm.invoke(
         "다음 마크다운 문단의 문장 표현만 자연스럽게 다듬어줘. 제목(#), 목록(-), 굵게(**) 같은 "
         "마크다운 구조와 내용의 순서는 그대로 유지하고, 새로운 사실이나 우열 판정을 추가하지 마. "
-        "[근거#N] 표기는 절대 바꾸거나 새로 만들지 말고 있는 그대로 유지해.\n\n" + raw_text
+        "[근거#N] 표기는 절대 바꾸거나 새로 만들지 말고 있는 그대로 유지해. 빈 줄도 그대로 둬. "
+        "문장 끝은 '~함', '~임', '~됨'처럼 명사형으로 맺고 '~다', '~습니다'는 쓰지 마.\n\n" + raw_text
     ).content
     return verify_citations(raw_text, polished, valid_ids)
 
@@ -370,7 +374,7 @@ def _select_claims(
 
 def _render_tech_view(tech_name: str, view: TechViewResult | None, source_of: dict[int, str] | None = None) -> str:
     """기술 하나의 관점 결과를 확인/반대/미확인 항목으로 렌더링. 모든 Claim에 근거 번호를 붙임."""
-    lines = [f"**{tech_name}**"]
+    lines = [f"**{tech_name}**", ""]  # 빈 줄이 없으면 Markdown이 아래 목록을 앞 문단에 붙임
     if view is None:
         lines.append("- (평가 결과 없음)")
         return "\n".join(lines)
@@ -384,7 +388,7 @@ def _render_tech_view(tech_name: str, view: TechViewResult | None, source_of: di
         shown = "; ".join(items[:_MAX_UNCONFIRMED_PER_CELL])
         more = f" 외 {len(items) - _MAX_UNCONFIRMED_PER_CELL}건" if len(items) > _MAX_UNCONFIRMED_PER_CELL else ""
         lines.append(f"- 미확인 항목: {shown}{more}")
-    if len(lines) == 1:
+    if len(lines) == 2:
         lines.append("- (확인된 사실 없음)")
     return "\n".join(lines)
 
@@ -505,7 +509,15 @@ def render_limitations(
 # ---------------------------------------------------------------------------
 
 
-def format_reference(ref: Reference) -> str:
+def _display_url(url: str, limit: int = 80) -> str:
+    """PDF 본문 폭을 넘지 않게 URL 표시만 줄임. 링크 대상은 원래 URL."""
+    from urllib.parse import unquote
+
+    text = unquote(url)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def format_reference(ref: Reference, link: bool = False) -> str:
     """13장 특허/논문/웹페이지 표기 형식.
 
     Reference 모델에 특허번호·권(호)·페이지 전용 필드가 없어 venue를 유형별로 다른
@@ -522,7 +534,10 @@ def format_reference(ref: Reference) -> str:
         return f"{ref.author_or_org}({ref.year}). {ref.title}. *{venue}*."
     if ref.type == "web":
         venue = ref.venue or "사이트명 미기재"
-        tail = f", {ref.url}" if ref.url else ""
+        if ref.url and link:
+            tail = f", [{_display_url(ref.url)}]({ref.url})"
+        else:
+            tail = f", {ref.url}" if ref.url else ""
         return f"{ref.author_or_org}({ref.year}). *{ref.title}*. {venue}{tail}"
     raise ValueError(f"unknown reference type: {ref.type}")
 
@@ -530,7 +545,7 @@ def format_reference(ref: Reference) -> str:
 def render_references(references: list[Reference]) -> str:
     if not references:
         return "(본문에서 인용된 자료 없음)"
-    return "\n".join(f"- [{r.id}] {format_reference(r)}" for r in references)
+    return "\n".join(f"- [{r.id}] {format_reference(r, link=True)}" for r in references)
 
 
 # ---------------------------------------------------------------------------
@@ -585,19 +600,33 @@ def write_report_json(data: dict[str, Any], path: Path = _REPORT_JSON_PATH) -> N
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def render_html(report_md: str) -> str:
+def _separate_lists(md: str) -> str:
+    """목록 첫 줄 앞에 빈 줄을 넣음. 문단 바로 아래 붙은 목록은 Markdown이 문단으로 이어 붙임."""
+    out: list[str] = []
+    for line in md.split("\n"):
+        if line.startswith("- ") and out and out[-1].strip() and not out[-1].startswith(("- ", "  ")):
+            out.append("")
+        out.append(line)
+    return "\n".join(out)
+
+
+def render_html(report_md: str, font_pt: float = 10.0) -> str:
     """마크다운 -> HTML. 폰트는 CSS에 ASCII 별칭만 두고 convert_to_pdf의 link_callback이
     실제 경로로 바꿔 줌 — xhtml2pdf CSS 파서가 url() 안의 한글 경로를 못 읽기 때문."""
     import markdown
 
-    body = markdown.markdown(report_md, extensions=["tables", "fenced_code"])
+    report_md = report_md.translate({0x2010: "-", 0x2011: "-", 0x2012: "-", 0x00A0: " "})
+    body = markdown.markdown(_separate_lists(report_md), extensions=["tables", "fenced_code"])
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
 @font-face {{ font-family: NanumGothic; src: url({_FONT_ALIAS}); }}
 * {{ font-family: NanumGothic; }}
-@page {{ size: A4; margin: 2cm; }}
-body {{ font-size: 10.5pt; line-height: 1.5; }}
+code, pre, tt {{ font-family: NanumGothic; }}
+a {{ color: #1a4f8b; text-decoration: none; }}
+@page {{ size: A4; margin: 1.8cm; }}
+body {{ font-size: {font_pt}pt; line-height: 1.45; }}
+li {{ margin-bottom: 2pt; }}
 h1 {{ font-size: 18pt; margin-top: 18pt; }}
 h2 {{ font-size: 14pt; margin-top: 16pt; border-bottom: 1px solid #999; }}
 h3 {{ font-size: 12pt; margin-top: 12pt; }}
@@ -605,6 +634,13 @@ table {{ width: 100%; margin: 6pt 0; }}
 th, td {{ border: 1px solid #999; padding: 4pt; font-size: 9.5pt; }}
 th {{ background: #eee; }}
 </style></head><body>{body}</body></html>"""
+
+
+def _page_count(path: Path) -> int:
+    import fitz
+
+    with fitz.open(path) as doc:
+        return doc.page_count
 
 
 def convert_to_pdf(report_md: str, output_path: Path = _REPORT_PDF_PATH) -> bool:
@@ -622,18 +658,23 @@ def convert_to_pdf(report_md: str, output_path: Path = _REPORT_PDF_PATH) -> bool
         return str(_FONT_PATH) if uri == _FONT_ALIAS else None
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with output_path.open("wb") as f:
-            result = pisa.CreatePDF(
-                render_html(_UNRENDERABLE_RE.sub("", report_md)),
-                dest=f,
-                encoding="utf-8",
-                link_callback=_resolve_font,
-                resource_policy=default_policy(_FONT_PATH.parent),
-            )
-        ok = not result.err and output_path.stat().st_size > 0
-    except Exception:  # noqa: BLE001 - 변환 실패는 .md 폴백으로 흡수함
-        ok = False
+    ok = False
+    # 제출 분량(최대 10쪽)을 넘으면 글자 크기를 줄여 다시 만듦
+    for font_pt in (10.0, 9.5, 9.0):
+        try:
+            with output_path.open("wb") as f:
+                result = pisa.CreatePDF(
+                    render_html(_UNRENDERABLE_RE.sub("", report_md), font_pt),
+                    dest=f,
+                    encoding="utf-8",
+                    link_callback=_resolve_font,
+                    resource_policy=default_policy(_FONT_PATH.parent),
+                )
+            ok = not result.err and output_path.stat().st_size > 0
+        except Exception:  # noqa: BLE001 - 변환 실패는 .md 폴백으로 흡수함
+            ok = False
+        if not ok or _page_count(output_path) <= config.REPORT_MAX_PAGES:
+            break
     if not ok:
         output_path.unlink(missing_ok=True)
     return ok

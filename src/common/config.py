@@ -102,6 +102,8 @@ TARGET_EVIDENCE_COUNT = int(os.getenv("TARGET_EVIDENCE_COUNT", "5"))
 REPORT_CITATION_STYLE = os.getenv("REPORT_CITATION_STYLE", "numeric").strip().lower()
 # 관점별 평가 절에서 (관점, 기술) 칸당 싣는 주장 수 상한. 보고서 10장 상한을 지키기 위함(0이면 제한 없음)
 REPORT_MAX_CLAIMS_PER_CELL = int(os.getenv("REPORT_MAX_CLAIMS_PER_CELL", "5"))
+# 제출 보고서 분량 상한(쪽). 넘으면 PDF 글자 크기를 줄여 다시 만듦
+REPORT_MAX_PAGES = int(os.getenv("REPORT_MAX_PAGES", "10"))
 
 # Orchestrator-Workers
 # orchestrator 모드: llm(기본, 생성 LLM이 칸별 초점을 고르고 계획 검증이 대칭, 커버리지, 상한을 보정) / rule(칸마다 기본 초점 하나)

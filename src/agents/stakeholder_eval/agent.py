@@ -75,7 +75,7 @@ class StakeholderEvalAgent(BaseAgent):
                     template_en.format(tech=tech.name, anchor=tech.search_anchor),
                     template.format(tech=tech.name, anchor="").replace("  ", " ").strip(),
                 ]
-                results, used = web_search_ladder(ladder, max_results=max_results)
+                results, used = web_search_ladder(ladder, max_results=max_results, keywords=tech.relevance_keywords)
                 self.last_queries_used[tech.name].append(used)
                 for r in results:
                     ev = self.new_evidence(

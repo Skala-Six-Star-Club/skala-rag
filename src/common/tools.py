@@ -217,14 +217,10 @@ def paper_reference(tech: str):
     return Reference(
         id=0,  # evidence_finalize가 인용 순서로 다시 매김
         type="paper",
-        author_or_org="arXiv",
+        author_or_org=spec.get("authors", "arXiv"),
         year="20" + spec["arxiv"][:2],
-        title=(
-            spec["file"].removesuffix(".pdf")
-            if spec["file"].removesuffix(".pdf") == spec["tech"]
-            else f"{spec['file'].removesuffix('.pdf')} ({spec['tech']})"
-        ),
-        venue=f"arXiv:{spec['arxiv']}",
+        title=spec.get("title") or spec["tech"],
+        venue=f"arXiv, {spec['arxiv']}",
         url=paper_reference_url(tech),
     )
 
@@ -243,13 +239,15 @@ def web_reference(result: "WebResult"):
     from src.common.state import Reference
 
     host = urlparse(result.url).netloc.removeprefix("www.") or "웹"
-    year = (result.published_date or "")[:4]
+    date = (result.published_date or "")[:10]
+    year = date if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date) else date[:4]
     if not year:
         # Tavily basic 검색은 발행일을 거의 주지 않음. URL 경로의 연도(/2026/03/ 등)를 대신 씀
         m = re.search(r"/((?:19|20)\d{2})(?:/|-|$)", urlparse(result.url).path)
         year = m.group(1) if m else "n.d."
     title = (result.title or result.url).strip()
     title = re.sub(r"\s+", " ", title)
+    title = re.sub(r"[\u2580-\u25ff\ufffd]+", "", title).strip()  # PDF 글꼴에 없는 기호 제거
     if len(title) > 120:  # SNS 게시글은 본문 전체가 제목으로 오므로 잘라 냄
         title = title[:117].rstrip() + "..."
     return Reference(
@@ -307,6 +305,28 @@ def paper_search(
 # ---------------------------------------------------------------------------
 
 
+# 출처 신뢰도가 낮거나 본문이 SNS 게시글인 사이트. 근거에서 제외함
+EXCLUDED_DOMAINS: tuple[str, ...] = (
+    "youtube.com", "youtu.be", "namu.wiki", "x.com", "twitter.com", "threads.net",
+    "threads.com", "facebook.com", "instagram.com", "tiktok.com",
+)
+
+
+def _excluded(url: str) -> bool:
+    from urllib.parse import urlparse
+
+    host = urlparse(url).netloc.lower().removeprefix("www.")
+    return any(host == d or host.endswith("." + d) for d in EXCLUDED_DOMAINS)
+
+
+def filter_relevant(results: list["WebResult"], keywords: list[str] | None) -> list["WebResult"]:
+    """제목이나 본문에 기술 키워드가 하나도 없는 검색 결과를 버림(앵커 회사의 다른 기사 차단)."""
+    if not keywords:
+        return results
+    keys = [k.lower() for k in keywords]
+    return [r for r in results if any(k in f"{r.title} {r.content}".lower() for k in keys)]
+
+
 @dataclass
 class WebResult:
     title: str
@@ -333,6 +353,7 @@ def _web_search_ddg(query: str, max_results: int) -> list[WebResult]:
             content=r.get("body", ""),
         )
         for r in rows
+        if not _excluded(r.get("href", r.get("url", "")))
     ]
 
 
@@ -341,7 +362,9 @@ def web_search(query: str, max_results: int = 5) -> list[WebResult]:
     if not config.TAVILY_API_KEY:
         return _web_search_ddg(query, max_results)
     client = TavilyClient(api_key=config.TAVILY_API_KEY)
-    response = client.search(query=query, max_results=max_results, search_depth="basic")
+    response = client.search(
+        query=query, max_results=max_results, search_depth="basic", exclude_domains=list(EXCLUDED_DOMAINS)
+    )
     return [
         WebResult(
             title=r.get("title", ""),
@@ -350,22 +373,24 @@ def web_search(query: str, max_results: int = 5) -> list[WebResult]:
             content=r.get("content", ""),
         )
         for r in response.get("results", [])
+        if not _excluded(r.get("url", ""))
     ]
 
 
 def web_search_ladder(
-    queries: list[str], max_results: int = 5
+    queries: list[str], max_results: int = 5, keywords: list[str] | None = None
 ) -> tuple[list[WebResult], str | None]:
     """질의 후보를 순서대로 시도해 처음 결과가 나온 것을 돌려줌(웹 전용 에이전트의 0건 분기).
 
     market_eval·stakeholder_eval은 논문 검색이 없어 웹이 0건이면 근거가 0건이 되고,
     evidence_check 규칙 1·3과 judge의 균형 판정이 연쇄로 걸림. 한국어 질의가 0건이면
     영어, 앵커 제거 순으로 넓히고, Tavily가 계속 0건이면 DuckDuckGo로 한 번 더 봄.
+    keywords가 있으면 관련 없는 결과를 버린 뒤 0건이면 다음 후보로 넘어감.
     반환: (결과, 실제로 결과를 낸 질의). 전부 0건이면 ([], None).
     """
     for q in queries:
         try:
-            results = web_search(q, max_results=max_results)
+            results = filter_relevant(web_search(q, max_results=max_results), keywords)
         except Exception as exc:  # 검색 API 오류는 0건과 같이 다음 후보로 넘어감
             results = []
             print(f"[web_search_ladder] '{q}' 실패: {exc}")
@@ -374,7 +399,7 @@ def web_search_ladder(
     if config.TAVILY_API_KEY:  # Tavily가 전부 0건이면 다른 엔진으로 마지막 시도
         for q in queries[:2]:
             try:
-                results = _web_search_ddg(q, max_results)
+                results = filter_relevant(_web_search_ddg(q, max_results), keywords)
             except Exception as exc:
                 results = []
                 print(f"[web_search_ladder] ddg '{q}' 실패: {exc}")

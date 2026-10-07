@@ -24,6 +24,7 @@ from src.common.focus import COUNTER, get_focus
 from src.common.state import AgentState, Evidence, Reference, TechViewResult, ViewResult
 from src.common.tools import (
     extract_view_result,
+    filter_relevant,
     format_paper_source,
     get_shared_index,
     paper_reference,
@@ -84,7 +85,7 @@ class TrlEvalAgent(BaseAgent):
             self.last_queries[tech.name] = {"paper": paper_query, "web": web_query}
 
             paper_docs = paper_search(self.index, paper_query, k=config.DEFAULT_TOP_K, role="target", tech=tech.name)
-            web_results = web_search(web_query, max_results=WEB_MAX_RESULTS)
+            web_results = filter_relevant(web_search(web_query, max_results=WEB_MAX_RESULTS), tech.relevance_keywords)
 
             passages: list[str] = []
             key_by_num: dict[int, str] = {}
