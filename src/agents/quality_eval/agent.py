@@ -109,3 +109,124 @@ def load_report_json(path: str | Path | None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # 규칙 판정. LLM과 임베딩 없이 단위 테스트할 수 있게 순수 함수로 둠
 # ---------------------------------------------------------------------------
+
+
+def check_coverage(sections: dict[str, str], evidence_by_id: dict[int, Evidence], techs: list[str]) -> tuple[CriterionResult, list[Gap]]:
+    cited = [evidence_by_id[i] for i in _cited_ids(sections.get(_VIEW_SECTION, "")) if i in evidence_by_id]
+    present = {(e.perspective, e.tech) for e in cited}
+    missing = [(p, t) for p in _PERSPECTIVES for t in techs if (p, t) not in present]
+    gaps = [
+        Gap(perspective=p, tech=t, reason="보고서 관점별 평가에 인용 근거 없음", source="quality_eval")
+        for p, t in missing
+    ]
+    return (
+        CriterionResult(
+            name="coverage",
+            passed=not missing,
+            method="rule",
+            issues=[f"{p}/{t}: 관점별 평가에 인용 근거 없음" for p, t in missing],
+        ),
+        gaps,
+    )
+
+
+def check_bias_control(sections: dict[str, str], evidence_by_id: dict[int, Evidence], techs: list[str]) -> tuple[CriterionResult, list[Gap]]:
+    ids = {i for body in sections.values() for i in _cited_ids(body)}
+    cited = [evidence_by_id[i] for i in ids if i in evidence_by_id and evidence_by_id[i].perspective in _PERSPECTIVES]
+    sources: dict[tuple[str, str], set[str]] = defaultdict(set)
+    per_tech: dict[str, int] = {t: 0 for t in techs}
+    counter_by_tech: dict[str, int] = {t: 0 for t in techs}
+    for e in cited:
+        sources[(e.perspective, e.tech)].add(e.reference_url or e.source)
+        per_tech[e.tech] = per_tech.get(e.tech, 0) + 1
+        if e.stance == "반대":
+            counter_by_tech[e.tech] = counter_by_tech.get(e.tech, 0) + 1
+
+    issues: list[str] = []
+    gaps: list[Gap] = []
+    for (perspective, tech), srcs in sorted(sources.items()):
+        if len(srcs) < config.QUALITY_MIN_SOURCES:
+            issues.append(f"{perspective}/{tech}: 인용 출처 {len(srcs)}곳(단일 출처 편중)")
+            gaps.append(Gap(perspective=perspective, tech=tech, reason="단일 출처 편중", source="quality_eval"))
+    for tech in techs:
+        if counter_by_tech.get(tech, 0) == 0:
+            issues.append(f"{tech}: 인용된 반대 근거 없음")
+            gaps.extend(
+                Gap(perspective=p, tech=tech, focus="counter", reason="반대 근거 인용 없음", source="quality_eval")
+                for p in _PERSPECTIVES
+                if (p, tech) in sources
+            )
+    counts = [c for c in per_tech.values() if c > 0]
+    if len(counts) == len(techs) >= 2 and max(counts) / min(counts) > config.QUALITY_MAX_RATIO:
+        low = min(per_tech, key=per_tech.get)
+        issues.append(f"기술 간 인용 수 비율 {max(counts)}:{min(counts)} > {config.QUALITY_MAX_RATIO:g}")
+        gaps.extend(
+            Gap(perspective=p, tech=low, reason="기술 간 인용 불균형", source="quality_eval")
+            for p in _PERSPECTIVES
+        )
+    unique: dict[tuple[str, str, str], Gap] = {}
+    for g in gaps:
+        unique.setdefault((g.perspective, g.tech, g.focus), g)
+    return CriterionResult(name="bias_control", passed=not issues, method="rule", issues=issues), list(unique.values())
+
+
+def check_biased_phrases(sections: dict[str, str]) -> list[str]:
+    hits = []
+    for title in (*_NARRATIVE_SECTIONS, _VIEW_SECTION):
+        for sentence in _sentences(sections.get(title, "")):
+            if any(re.search(p, sentence) for p in _BIASED_PATTERNS):
+                hits.append(sentence)
+    return hits
+
+
+DATA_CRITERIA = {"coverage", "bias_control"}
+TEXT_CRITERIA = {"groundedness", "neutrality"}
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[\s\W_]+", "", _CITATION_RE.sub("", text))
+
+
+def match_sentence(flag: str, sentences: list[str]) -> str | None:
+    """LLM이 지적한 문장을 실제 평가 대상 문장과 대조함. 찾지 못하면 None(LLM이 지어낸 지적).
+
+    검수 모델이 프롬프트 예시나 다른 문장을 베껴 오는 경우가 있어, 앞 20자(공백, 기호 제외)가
+    실제 문장에 들어 있거나 실제 문장의 앞 20자가 지적 문장에 들어 있을 때만 같은 문장으로 봄.
+    """
+    key = _norm(flag)[:20]
+    if len(key) < 8:
+        return None
+    for sentence in sentences:
+        norm = _norm(sentence)
+        if key in norm or (len(norm) >= 8 and norm[:20] in _norm(flag)):
+            return sentence
+    return None
+
+
+def verify_judgment(judgment: "_NeutralityJudgment", sections: dict[str, str]) -> tuple["_NeutralityJudgment", int]:
+    """실제 문장과 대조되지 않는 지적, 근거 번호가 있는데 근거 없다고 한 지적을 버림. (검증된 판정, 버린 수)."""
+    sentences = [s for t in _NARRATIVE_SECTIONS for s in _sentences(sections.get(t, ""))]
+    dropped = 0
+    biased = []
+    for flag in judgment.biased_sentences:
+        if match_sentence(flag.sentence, sentences) is None:
+            dropped += 1
+        else:
+            biased.append(flag)
+    uncited = []
+    for flag in judgment.sentences_without_evidence:
+        matched = match_sentence(flag, sentences)
+        if matched is None or _CITATION_RE.search(matched):
+            dropped += 1
+        else:
+            uncited.append(flag)
+    return judgment.model_copy(update={"biased_sentences": biased, "sentences_without_evidence": uncited}), dropped
+
+
+def decide_route(criteria: list[CriterionResult], gaps: list[Gap], replans_left: bool, rewrites_left: bool) -> str:
+    failed = {c.name for c in criteria if not c.passed}
+    if failed & DATA_CRITERIA and gaps and replans_left:
+        return "orchestrator"
+    if failed & TEXT_CRITERIA and rewrites_left:
+        return "synthesize"
+    return "end"
