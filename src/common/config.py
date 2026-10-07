@@ -124,3 +124,12 @@ DECISION_LOG_DIR = Path(os.getenv("DECISION_LOG_DIR", "./output/logs"))
 CHECKPOINTER = os.getenv("CHECKPOINTER", "sqlite").strip().lower()
 CHECKPOINT_DB_PATH = Path(os.getenv("CHECKPOINT_DB_PATH", "./output/checkpoints.sqlite"))
 
+# 품질 평가(quality_eval) 규칙 임계값
+# 편향 통제: (관점, 기술)별 보고서가 인용한 서로 다른 출처의 최소 수
+QUALITY_MIN_SOURCES = int(os.getenv("QUALITY_MIN_SOURCES", "2"))
+# 편향 통제: 두 기술의 인용 근거 수 비율 상한(evidence_check 규칙 3과 같은 값)
+QUALITY_MAX_RATIO = float(os.getenv("QUALITY_MAX_RATIO", "2.0"))
+# Groundedness: 인용이 붙은 문장 중 인용문과 의미가 이어지는 문장의 최소 비율
+QUALITY_MIN_GROUNDED_RATIO = float(os.getenv("QUALITY_MIN_GROUNDED_RATIO", "0.8"))
+# 중립성 LLM Judge 사용 여부(1). 0이면 규칙(금지 표현 목록)만으로 판정
+QUALITY_USE_LLM_JUDGE = os.getenv("QUALITY_USE_LLM_JUDGE", "1") == "1"
