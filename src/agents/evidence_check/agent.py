@@ -147,9 +147,11 @@ class EvidenceCheckAgent(BaseAgent):
         if evidence is None or (not evidence and state.get("evidence")):
             evidence = state.get("evidence", [])
         evidence = list(evidence or [])
+        # 품질 평가 Loop로 다시 들어오면 앞 round의 Claim은 확정 번호(evidence_ids)만
+        # 갖고 있으므로 finalize가 쓴 확정 evidence도 번호 조회에 포함한다.
         evidence_by_id = {
             evidence_item.id: evidence_item
-            for evidence_item in evidence
+            for evidence_item in [*(state.get("evidence") or []), *evidence]
             if evidence_item.id is not None
         }
         evidence_by_key = {
