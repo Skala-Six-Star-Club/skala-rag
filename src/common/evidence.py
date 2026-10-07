@@ -140,7 +140,7 @@ def _remap_view_result(
                 ],
             }
         )
-    return result.model_copy(update={"by_tech": by_tech})
+    return result.model_copy(update={"by_tech": by_tech, "replace": True})
 
 
 def _dedupe_references(references: Iterable[Reference | dict[str, Any]]) -> list[Reference]:
