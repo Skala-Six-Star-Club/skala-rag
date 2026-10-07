@@ -54,3 +54,45 @@ RAG 실습 당시의 README(비교실험, 에이전트별 테스트 결과)는 [
 | 점검 | `evidence_check` | 규칙 기반 근거 충분성 점검(근거 수, 반대 근거, 기술 간 비율, 그라운딩). 부족 칸을 orchestrator에 re-plan 요청 |
 | 평가 | `quality_eval` | 보고서 품질 평가와 Loop 분기 |
 | 기타 | `select_tech`, `tech_research`, `evidence_finalize`, `report` | 기술 선정 로드, 기술 조사, 근거 번호 확정, 보고서 조립(MD, PDF, JSON) |
+
+## State Schema
+
+정의는 [src/common/state.py](src/common/state.py)의 `AgentState`.
+
+- 제어 vs 페이로드 분리 : `AgentState`를 작업 페이로드(기술, 관점 결과, 근거, 종합, 보고서 경로)와 제어 메타데이터(`trace_id`, `plan`, `plan_round`, `pending_gaps`, `retry_count`, `eval_count`, `node_status`, `last_error`, `step_count`) 구획으로 나눔. 라우팅 함수(`src/orchestration/routing.py`)는 제어 구획만 읽음
+- 관측성 위치 : 결정과 사유는 State에 넣지 않음. orchestrator, evidence_check, quality_eval, worker Fall-back, 라우터가 `{trace_id, node, decision, reason, ts}`를 `output/logs/<trace_id>.jsonl`에 적재하고, LLM 호출 단위의 상세는 LangSmith 트레이스에 남김
+- 지속성 비용 : worker에는 State 전체 대신 필요한 필드만 Send로 전달. 보고서 본문은 파일로만 두고 State에는 경로만 둠. 근거 원문은 200자 인용만 보관
+- 상관 : `trace_id` 하나를 LangSmith metadata와 tag, 결정 로그 파일명, 체크포인트 `thread_id`, `report.json`에 함께 기록. 실행마다 LangSmith 루트 run id(`run_id`)를 직접 지정해 결정 로그와 `report.json`에도 남김
+- 재개/복구 : SQLite 체크포인터에 superstep마다 저장. `python app.py --resume <trace_id>`로 마지막 체크포인트부터 재개. orchestrator가 계획 시점에 서브 태스크를 `node_status`에 pending으로 기록하고 worker가 done, excluded로 바꿈. 중단 뒤 pending으로 남은 작업이 미완료 작업임. 작업별 오류는 `task_errors`, 제외된 서브 태스크는 `excluded_subtasks`, 모든 round의 작업 목록은 `planned_subtasks`(report.json의 `tasks`)
+- 동시 처리 : 동적 Fan-out에서 동시에 쓰는 필드는 모두 Reducer를 둠. 관점 결과는 기술 키 기준 이어 붙이기(`merge_view_results`, 그라운딩 필터와 번호 확정만 교체), 근거와 참고문헌은 `operator.add`, `node_status`는 dict 병합, `step_count`는 합산. 임시 근거 key에 (관점, round, 기술, 초점)을 넣어 같은 칸의 서브 태스크끼리 충돌하지 않게 함
+- 종료 보장 : 재검색 1회(`retry_count`), 품질 재계획 `MAX_QUALITY_REPLANS`회(`quality_replan_count`), 재작성 `MAX_QUALITY_REWRITES`회(`quality_rewrite_count`), 노드 실행 수 `MAX_STEPS`(`step_count`), `recursion_limit`. 상한에 걸리면 Loop를 건너뛰고 종료 쪽으로 진행하며 사유를 결정 로그에 남김
+
+## Architecture
+
+```mermaid
+graph TD
+    S[select_tech] --> R[tech_research]
+    R --> P[orchestrator]
+    P -- "Send x plan.subtasks" --> W["view workers<br/>trl / market / stakeholder / domain"]
+    W --> C{evidence_check}
+    C -- "부족 칸 re-plan, 1회" --> P
+    C -- "충족 또는 소진" --> F[evidence_finalize]
+    F --> Y[synthesize]
+    Y --> RP[report]
+    RP --> Q{quality_eval}
+    Q -- "coverage, bias_control 미달" --> P
+    Q -- "groundedness, neutrality 미달" --> Y
+    Q -- "통과 또는 예산 소진" --> E([END])
+```
+
+### 보고서 품질 평가
+
+| 평가 항목 | 방식 | 판정 | 미달 시 |
+|---|---|---|---|
+| Groundedness | 규칙 + 임베딩 + LLM | 인용 번호가 실제 근거인지, 인용 문장과 인용문의 코사인 유사도 비율, 근거 없는 사실 문장 | synthesize 재작성 |
+| 중립성 | 규칙 + LLM | 우열 판정, 추천 금지 표현 목록과 검수 LLM 지적 | synthesize 재작성 |
+| 편향 통제 | 규칙 | (관점, 기술)별 인용 출처 수, 기술별 반대 근거 인용, 기술 간 인용 수 비율 | 부족 칸 re-plan |
+| 관점 커버리지 | 규칙 | 관점별 평가 절에 4개 관점 x 기술 모든 칸의 인용 존재 | 부족 칸 re-plan |
+
+조사와 서술이 모두 미달이면 재조사를 먼저 하고, 재조사 뒤 다시 실행되는 synthesize가 서술 지적도 함께 반영함.
+판정 결과는 `output/report.json`의 `quality_eval`, `quality_eval_history`에 남고, 최종 판정은 보고서 한계점 절의 "최종 품질 평가 결과" 표로도 실림.
