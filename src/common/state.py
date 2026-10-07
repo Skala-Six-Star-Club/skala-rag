@@ -196,6 +196,30 @@ class Plan(BaseModel):
     corrections: list[str] = Field(default_factory=list)
 
 
+Criterion = Literal["groundedness", "neutrality", "bias_control", "coverage"]
+
+
+class CriterionResult(BaseModel):
+    name: Criterion
+    passed: bool
+    method: Literal["rule", "llm", "hybrid"]
+    issues: list[str] = Field(default_factory=list)
+
+
+class EvalVerdict(BaseModel):
+    """quality_eval 출력. 항목별 판정과 미달 시 되돌아갈 노드."""
+
+    passed: bool
+    criteria: list[CriterionResult] = Field(default_factory=list)
+    # 커버리지, 편향 미달은 orchestrator에 넘길 부족 칸
+    gaps: list[Gap] = Field(default_factory=list)
+    route: Literal["synthesize", "orchestrator", "end"] = "end"
+    attempt: int = 0
+
+    def issues_for(self, *names: str) -> list[str]:
+        return [i for c in self.criteria if c.name in names and not c.passed for i in c.issues]
+
+
 class AgentState(TypedDict, total=False):
     """LangGraph 그래프 전체가 공유하는 State (11장 표)."""
 
