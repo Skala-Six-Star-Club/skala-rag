@@ -118,3 +118,9 @@ MAX_QUALITY_REWRITES = int(os.getenv("MAX_QUALITY_REWRITES", "1"))
 MAX_STEPS = int(os.getenv("MAX_STEPS", "80"))
 RECURSION_LIMIT = int(os.getenv("RECURSION_LIMIT", "100"))
 
+# 관측성과 재개
+DECISION_LOG_DIR = Path(os.getenv("DECISION_LOG_DIR", "./output/logs"))
+# sqlite(기본, langgraph-checkpoint-sqlite 필요, 없으면 memory로 대체) / memory / none
+CHECKPOINTER = os.getenv("CHECKPOINTER", "sqlite").strip().lower()
+CHECKPOINT_DB_PATH = Path(os.getenv("CHECKPOINT_DB_PATH", "./output/checkpoints.sqlite"))
+
