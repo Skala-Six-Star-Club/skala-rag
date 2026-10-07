@@ -31,7 +31,9 @@ from pydantic import BaseModel, Field
 
 from src.common.models import get_generation_llm
 from src.common.base_agent import BaseAgent
-from src.common.state import AgentState, Conflict, Synthesis
+from src.common.observability import log_decision
+from src.common.state import AgentState, Claim, Conflict, Synthesis, ViewResult
+from src.common.tools import strip_citation_tokens
 
 _PROMPT_TEMPLATE = """\
 아래는 TurboQuant(SW)와 ITME(HW) 두 기술에 대한 4개 관점(기술 성숙도, 시장성,
@@ -53,9 +55,26 @@ _PROMPT_TEMPLATE = """\
 두 기술을 비교해 우열을 매기는 데는 쓰지 말 것.
 """
 
+_VIEW_LABELS = {
+    "trl_result": "기술 성숙도",
+    "market_result": "시장성",
+    "stakeholder_result": "이해관계자",
+    "domain_result": "도메인 적용",
+}
 
-class _SynthesisNarrative(BaseModel):
-    """LLM 구조화 출력용 서술 스키마.
+
+class _CitedSentence(BaseModel):
+    text: str
+    evidence_ids: list[int] = Field(default_factory=list)
+
+
+class _ConflictDraft(BaseModel):
+    topic: str
+    sentences: list[_CitedSentence] = Field(default_factory=list)
+
+
+class _SynthesisDraft(BaseModel):
+    """LLM 구조화 출력용 스키마. 문장마다 근거 번호를 따로 받아 코드가 검증하고 [근거#N]을 붙임.
 
     동적 dictionary인 perspective_confidence는 LLM Structured Outputs에 직접
     요청하지 않고, 코드가 Synthesis에 별도로 채운다.
