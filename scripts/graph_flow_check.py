@@ -1,23 +1,46 @@
-"""그래프 흐름 검증(API 키·PDF 불필요). stub 노드로 12장 흐름과 (관점, 기술) Send fan-out을 확인함.
+"""그래프 흐름 검증(API 키, PDF, 임베딩 모델 불필요).
 
-확인 항목:
-1. tech_research 뒤 관점 4개 x 기술 2개 = 8회 호출이 같은 superstep에서 실행됨
-2. 같은 관점 필드에 두 호출이 쓴 ViewResult가 기술 키로 합쳐짐(merge_view_results)
-3. evidence_check가 특정 (관점, 기술)만 부족하다고 하면 그 조합만 재검색됨(retry_scopes)
-4. 재검색 결과의 provisional key가 1차와 충돌하지 않고 finalize가 연속 번호를 부여함
-5. judge 위반 -> synthesize 재작성 1회 -> report
+orchestrator, evidence_check, evidence_finalize, quality_eval은 실제 코드를 쓰고, LLM과 검색이
+필요한 노드와 임베딩만 stub으로 바꿔 Orchestrator-Workers 흐름을 확인함.
+
+확인 항목
+1. Dynamic Fan-out: orchestrator가 계획한 (관점, 기술, 초점) 서브 태스크 수만큼 worker가 실행됨.
+   LLM 계획의 빈 칸, 비대칭, 잘못된 초점을 계획 검증이 보정하고 사유를 남김
+2. 같은 (관점, 기술)의 서브 태스크 결과가 덮어쓰이지 않고 이어 붙음, 임시 key 충돌 없음
+3. Fall-back: 한 번 실패한 worker는 재시도로 성공, 계속 실패한 worker는 제외되고 기록됨
+4. evidence_check의 부족 칸만 re-plan(round 1)으로 재조사
+5. quality_eval 커버리지 미달 -> orchestrator Loop(round 2) -> 통과 후 종료. 재계획, 재작성 예산은 따로 셈
+6. finalize 재실행 시 앞서 확정한 근거 번호가 바뀌지 않음
+7. 체크포인트 재개: synthesize에서 중단된 실행을 같은 thread_id로 이어서 완료
+8. 결정 로그(JSONL)에 orchestrator, evidence_check, quality_eval 결정과 사유가 남음
 
 실행: python -m scripts.graph_flow_check
 """
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 from collections import Counter
+from pathlib import Path
 
-from src.common.base_agent import BaseAgent
-from src.common.evidence import finalize_evidence
-from src.common.state import Claim, JudgeFeedback, Synthesis, TechSpec, TechViewResult, ViewResult
-from src.graph import ALL_NODES, NODE_EVIDENCE_FINALIZE, VIEW_NODES, build_graph
+_TMP = Path(tempfile.mkdtemp(prefix="graph_flow_check_"))
+os.environ["DECISION_LOG_DIR"] = str(_TMP / "logs")
+os.environ["MAX_QUALITY_REPLANS"] = "1"
+os.environ["MAX_QUALITY_REWRITES"] = "1"
+
+from langgraph.checkpoint.memory import InMemorySaver  # noqa: E402
+
+import src.agents.evidence_check.agent as evidence_check_module  # noqa: E402
+from src.agents.evidence_check.agent import EvidenceCheckAgent  # noqa: E402
+from src.agents.quality_eval.agent import QualityEvalAgent, check_biased_phrases, decide_route  # noqa: E402
+from src.common.base_agent import BaseAgent  # noqa: E402
+from src.common.evidence import finalize_evidence  # noqa: E402
+from src.common.observability import read_decisions, run_config  # noqa: E402
+from src.common.state import Claim, CriterionResult, Gap, Synthesis, TechProfile, TechSpec, TechViewResult, ViewResult  # noqa: E402
+from src.graph import ALL_NODES, NODE_EVIDENCE_FINALIZE, VIEW_NODES, build_graph  # noqa: E402
+from src.orchestration.orchestrator import OrchestratorAgent, _Pick, _PlanDraft, validate_plan  # noqa: E402
 
 TECHS = [
     TechSpec(name="TurboQuant", camp="SW", role="target", search_anchor="Google"),
