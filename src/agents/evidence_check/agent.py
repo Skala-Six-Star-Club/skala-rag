@@ -217,6 +217,7 @@ class EvidenceCheckAgent(BaseAgent):
                         tech_result.confirmed_facts or tech_result.counter_facts
                     ):
                         short_techs.add(tech)
+                        reasons[tech].append("그라운딩 후 남은 주장 없음")
                         needs_retry = True
 
             if needs_retry and budget_left:
