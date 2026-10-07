@@ -1,4 +1,5 @@
 langgraph==0.6.7
+langgraph-checkpoint-sqlite==2.0.11   # 실행 재개용 체크포인터(없으면 메모리 체크포인터로 대체)
 langchain==0.3.27
 langchain-openai==0.3.28
 langchain-community==0.3.27
