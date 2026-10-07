@@ -92,21 +92,43 @@ class ViewResult(BaseModel):
     기술명 -> TechViewResult로 두 기술을 나란히 담음."""
 
     by_tech: dict[str, TechViewResult] = Field(default_factory=dict)
+    # True면 reducer가 by_tech의 해당 기술을 통째로 교체함(evidence_check 그라운딩 필터,
+    # evidence_finalize 번호 확정처럼 이미 병합된 결과를 다시 쓰는 경우). False(worker
+    # 출력)면 같은 기술의 기존 결과 뒤에 이어 붙임.
+    replace: bool = False
+
+
+def _append_tech_view(left: TechViewResult, right: TechViewResult) -> TechViewResult:
+    def _claims(a: list[Claim], b: list[Claim]) -> list[Claim]:
+        seen = {(c.statement, tuple(c.evidence_keys), tuple(c.evidence_ids)) for c in a}
+        return [*a, *(c for c in b if (c.statement, tuple(c.evidence_keys), tuple(c.evidence_ids)) not in seen)]
+
+    return TechViewResult(
+        confirmed_facts=_claims(left.confirmed_facts, right.confirmed_facts),
+        counter_facts=_claims(left.counter_facts, right.counter_facts),
+        unconfirmed_items=list(dict.fromkeys([*left.unconfirmed_items, *right.unconfirmed_items])),
+    )
 
 
 def merge_view_results(left: ViewResult | None, right: ViewResult | None) -> ViewResult:
-    """관점 결과 reducer. 같은 관점 노드가 (관점, 기술) 단위로 병렬 실행되면(graph.py의
-    Send fan-out) 두 실행이 같은 superstep에 각각 한 기술의 ViewResult를 돌려주므로,
-    덮어쓰기 대신 by_tech를 기술 키로 합침. 같은 기술은 나중 값(재검색 결과)이 이김.
-    evidence_check가 그라운딩 필터를 거친 결과를 되돌려 줄 때도 같은 규칙으로 반영됨."""
+    """관점 결과 reducer.
+
+    orchestrator가 같은 (관점, 기술)에 초점이 다른 서브 태스크를 여러 개 만들면 같은
+    superstep에서 같은 기술 키로 결과가 여러 번 들어오므로, 기술 키가 겹치면 덮어쓰지
+    않고 이어 붙임. ``replace=True``인 갱신(그라운딩 필터, 번호 확정)만 교체함.
+    """
     if right is None:
         return left if left is not None else ViewResult()
-    if left is None:
-        return right if isinstance(right, ViewResult) else ViewResult.model_validate(right)
-    left = left if isinstance(left, ViewResult) else ViewResult.model_validate(left)
     right = right if isinstance(right, ViewResult) else ViewResult.model_validate(right)
+    if left is None:
+        return ViewResult(by_tech=dict(right.by_tech))
+    left = left if isinstance(left, ViewResult) else ViewResult.model_validate(left)
     merged = dict(left.by_tech)
-    merged.update(right.by_tech)
+    for tech, view in right.by_tech.items():
+        if right.replace or tech not in merged:
+            merged[tech] = view
+        else:
+            merged[tech] = _append_tech_view(merged[tech], view)
     return ViewResult(by_tech=merged)
 
 
@@ -135,49 +157,138 @@ class JudgeFeedback(BaseModel):
     notes: str = ""
 
 
-class AgentState(TypedDict, total=False):
-    """LangGraph 그래프 전체가 공유하는 State (11장 표)."""
+ViewPerspective = Literal["trl", "market", "stakeholder", "domain"]
 
+
+class SubTask(BaseModel):
+    """orchestrator가 만드는 worker 실행 단위. (관점, 기술, 초점) 하나가 Send 하나임.
+    focus는 src/common/focus.py 카탈로그의 초점 id(관점 필수 항목 하나에 대응)."""
+
+    subtask_id: str
+    perspective: ViewPerspective
+    tech: str
+    focus: str
+    round: int = 0  # 0: 최초 계획, 1 이상: re-plan
+    reason: str = ""
+
+    @property
+    def node(self) -> str:
+        return f"{self.perspective}_eval"
+
+
+class Gap(BaseModel):
+    """re-plan 요청 한 건. evidence_check(근거 부족)나 quality_eval(커버리지, 편향 미달)이 씀."""
+
+    perspective: ViewPerspective
+    tech: str
+    focus: str | None = None  # None이면 orchestrator가 그 칸에서 아직 조사하지 않은 초점을 고름
+    reason: str = ""
+    source: Literal["evidence_check", "quality_eval"] = "evidence_check"
+
+
+class Plan(BaseModel):
+    """orchestrator 출력. 이번 round에 실행할 서브 태스크 목록과 계획 사유."""
+
+    round: int = 0
+    subtasks: list[SubTask] = Field(default_factory=list)
+    rationale: str = ""
+    # 계획 검증이 LLM 계획을 고친 내역(빈 칸 보정, 대칭 보정, 상한 조정 등)
+    corrections: list[str] = Field(default_factory=list)
+
+
+Criterion = Literal["groundedness", "neutrality", "bias_control", "coverage"]
+
+
+class CriterionResult(BaseModel):
+    name: Criterion
+    passed: bool
+    method: Literal["rule", "llm", "hybrid"]
+    issues: list[str] = Field(default_factory=list)
+
+
+class EvalVerdict(BaseModel):
+    """quality_eval 출력. 항목별 판정과 미달 시 되돌아갈 노드."""
+
+    passed: bool
+    criteria: list[CriterionResult] = Field(default_factory=list)
+    # 커버리지, 편향 미달은 orchestrator에 넘길 부족 칸
+    gaps: list[Gap] = Field(default_factory=list)
+    route: Literal["synthesize", "orchestrator", "end"] = "end"
+    attempt: int = 0
+
+    def issues_for(self, *names: str) -> list[str]:
+        return [i for c in self.criteria if c.name in names and not c.passed for i in c.issues]
+
+
+def merge_dicts(left: dict | None, right: dict | None) -> dict:
+    """병렬 worker가 같은 dict 필드(node_status)에 동시에 쓰는 갱신을 키 단위로 합침."""
+    return {**(left or {}), **(right or {})}
+
+
+def keep_last(left: str | None, right: str | None) -> str | None:
+    """병렬 갱신 중 마지막 값만 남김. 같은 superstep에서 여러 worker가 실패해도 충돌하지 않음."""
+    return right if right is not None else left
+
+
+class AgentState(TypedDict, total=False):
+    """LangGraph 그래프 전체가 공유하는 State.
+
+    설계 원칙:
+    - 작업 페이로드와 제어 메타데이터를 구획으로 나눔. 라우팅 함수는 제어 구획만 읽음.
+    - 결정 사유와 로그 본문은 State에 넣지 않고 observability 계층(JSONL, LangSmith)으로
+      내보내며, ``trace_id``로 State와 외부 로그를 잇음.
+    - 병렬 worker가 함께 쓰는 필드는 모두 Reducer를 둠.
+    """
+
+    # -- 작업 페이로드 ---------------------------------------------------------
     techs: list[TechSpec]
     domain: str
     tech_profiles: dict[str, TechProfile]
 
-    # (관점, 기술) 단위 병렬 실행이 같은 관점 필드에 동시에 쓰므로 기술 키로 합침
+    # 같은 관점 필드에 여러 서브 태스크가 동시에 쓰므로 기술 키로 이어 붙임
     trl_result: Annotated[ViewResult, merge_view_results]
     market_result: Annotated[ViewResult, merge_view_results]
     stakeholder_result: Annotated[ViewResult, merge_view_results]
     domain_result: Annotated[ViewResult, merge_view_results]
 
-    # Send fan-out으로 관점 노드를 호출할 때 그래프가 넣어 주는 실행 범위(기술명 하나).
-    # 없으면 노드는 techs 전체를 처리함(독립 실행 스크립트, 레거시 호환).
-    tech_scope: str
-
-    # 여러 병렬 노드가 쓰는 누적 영역. evidence_finalize 이후에도 감사/디버깅용으로
-    # 남겨 두지만, 보고서와 인용 검증은 아래의 확정된 evidence를 사용한다.
+    # 병렬 worker의 누적 영역(임시 key). evidence_finalize가 아래 확정 결과로 정리함.
     raw_evidence: Annotated[list[Evidence], operator.add]
     raw_references: Annotated[list[Reference], operator.add]
-
-    # evidence_finalize가 한 번에 기록하는 확정 결과(덮어쓰기 필드).
     evidence: list[Evidence]
     references: list[Reference]
-    evidence_finalized: bool
+
+    perspective_confidence: dict[str, dict[str, float]]
+    synthesis: Synthesis
+    judge_feedback: JudgeFeedback  # 단독 judge 노드 호환용. 통합 그래프는 eval_result를 씀
+    eval_result: EvalVerdict
+
+    # 보고서 본문은 파일로만 두고 State에는 경로만 둠(체크포인트 크기 관리)
+    report_path: str
+    report_json_path: str
+
+    # -- 제어 메타데이터 (조정, 종료, 재개에 필요한 최소치) ------------------------
+    trace_id: str  # 외부 로그, LangSmith 메타데이터, 체크포인트 thread_id와 잇는 상관 키
+    run_id: str  # LangSmith 루트 run id(실행 1회). 재개하면 새 run id가 결정 로그에 남음
+    plan: Plan  # 현재 round의 계획. 다음 re-plan이 덮어씀
+    planned_subtasks: Annotated[list[SubTask], operator.add]  # 모든 round에서 계획된 서브 태스크
+    plan_round: int
+    pending_gaps: list[Gap]  # orchestrator가 다음 round에서 처리할 부족 칸
+    excluded_subtasks: Annotated[list[SubTask], operator.add]  # Fall-back으로 제외된 작업
+
+    # Send payload 전용. worker 하나가 맡은 서브 태스크와 기술명
+    subtask: SubTask
+    tech_scope: str
 
     retry_targets: list[str]
-    # 재검색을 기술 단위로 좁히기 위한 범위: 노드 이름 -> 부족한 기술명 목록.
-    # evidence_check가 채우고 graph.py가 (노드, 기술)별 Send로 씀. 비어 있으면 전체 기술.
     retry_scopes: dict[str, list[str]]
     retry_count: int
     rewrite_count: int
+    eval_count: int
+    quality_replan_count: int  # quality_eval이 orchestrator 재계획을 요청한 횟수
+    quality_rewrite_count: int  # quality_eval이 synthesize 재작성을 요청한 횟수
+    evidence_finalized: bool
 
-    # evidence_check가 계산한 관점별·기술별 근거량 점수(0~1).
-    perspective_confidence: dict[str, dict[str, float]]
-
-    synthesis: Synthesis
-    # 12장 "반복 2"(judge -> synthesize 재작성, 1회 한정)의 횟수. 11장 표에는 없지만
-    # retry_count와 같은 역할이라 추가함. synthesize가 쓰고 그래프 조건 분기가 읽음.
-    rewrite_count: int
-    judge_feedback: JudgeFeedback
-
-    report_md: str
-    report_path: str
-    report_json_path: str
+    node_status: Annotated[dict[str, str], merge_dicts]  # subtask_id -> pending(계획), done, excluded
+    task_errors: Annotated[dict[str, str], merge_dicts]  # subtask_id -> 마지막 오류. 재개 시 실패 원인 확인용
+    last_error: Annotated[str | None, keep_last]
+    step_count: Annotated[int, operator.add]  # 노드 실행 수. 종료 가드
