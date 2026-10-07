@@ -92,6 +92,22 @@ class ViewResult(BaseModel):
     기술명 -> TechViewResult로 두 기술을 나란히 담음."""
 
     by_tech: dict[str, TechViewResult] = Field(default_factory=dict)
+    # True면 reducer가 by_tech의 해당 기술을 통째로 교체함(evidence_check 그라운딩 필터,
+    # evidence_finalize 번호 확정처럼 이미 병합된 결과를 다시 쓰는 경우). False(worker
+    # 출력)면 같은 기술의 기존 결과 뒤에 이어 붙임.
+    replace: bool = False
+
+
+def _append_tech_view(left: TechViewResult, right: TechViewResult) -> TechViewResult:
+    def _claims(a: list[Claim], b: list[Claim]) -> list[Claim]:
+        seen = {(c.statement, tuple(c.evidence_keys), tuple(c.evidence_ids)) for c in a}
+        return [*a, *(c for c in b if (c.statement, tuple(c.evidence_keys), tuple(c.evidence_ids)) not in seen)]
+
+    return TechViewResult(
+        confirmed_facts=_claims(left.confirmed_facts, right.confirmed_facts),
+        counter_facts=_claims(left.counter_facts, right.counter_facts),
+        unconfirmed_items=list(dict.fromkeys([*left.unconfirmed_items, *right.unconfirmed_items])),
+    )
 
 
 def merge_view_results(left: ViewResult | None, right: ViewResult | None) -> ViewResult:
