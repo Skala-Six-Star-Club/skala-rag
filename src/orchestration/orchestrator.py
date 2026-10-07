@@ -234,3 +234,25 @@ class OrchestratorAgent(BaseAgent):
         return draft.picks, draft.rationale
 
     # -- round 1+ ----------------------------------------------------------------
+
+    def _replan(self, state: AgentState, round_: int) -> Plan:
+        gaps: list[Gap] = list(state.get("pending_gaps") or [])
+        executed = _executed(state)
+        subtasks: list[SubTask] = []
+        seen: set[tuple[str, str, str]] = set()
+        for gap in gaps:
+            focus = gap.focus
+            if focus is None or not is_valid_focus(gap.perspective, focus):
+                unexplored = [
+                    f for f in FOCI[gap.perspective]
+                    if f != COUNTER and (gap.perspective, f, gap.tech) not in executed
+                ]
+                focus = unexplored[0] if unexplored else COUNTER
+            key = (gap.perspective, focus, gap.tech)
+            if key in seen or len(subtasks) >= self.max_subtasks:
+                continue
+            seen.add(key)
+            subtasks.append(_subtask(round_, gap.perspective, gap.tech, focus, f"[{gap.source}] {gap.reason}"))
+        sources = sorted({g.source for g in gaps}) or ["없음"]
+        rationale = f"re-plan(요청: {', '.join(sources)}). 부족한 칸 {len(subtasks)}건만 재조사"
+        return Plan(round=round_, subtasks=subtasks, rationale=rationale)
