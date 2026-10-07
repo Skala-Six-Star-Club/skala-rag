@@ -339,3 +339,61 @@ class QualityEvalAgent(BaseAgent):
                 if f.kind != "해당 없음" and f.sentence.strip()
             ]
         return CriterionResult(name="neutrality", passed=not issues, method=method, issues=issues)  # type: ignore[arg-type]
+
+    def _groundedness(
+        self,
+        sections: dict[str, str],
+        evidence_by_id: dict[int, Evidence],
+        judgment: _NeutralityJudgment | None,
+    ) -> CriterionResult:
+        issues: list[str] = []
+        all_ids = {i for body in sections.values() for i in _cited_ids(body)}
+        invalid = sorted(all_ids - set(evidence_by_id))
+        if invalid:
+            issues.append(f"존재하지 않는 근거 번호 인용: {invalid}")
+
+        method = "rule"
+        pairs: list[tuple[str, list[str]]] = []
+        for title in _NARRATIVE_SECTIONS:
+            for sentence in _sentences(sections.get(title, "")):
+                ids = [i for i in _cited_ids(sentence) if i in evidence_by_id]
+                quotes = [evidence_by_id[i].quote for i in ids if evidence_by_id[i].quote]
+                if quotes:
+                    pairs.append((_CITATION_RE.sub("", sentence).strip(), quotes))
+        if pairs:
+            try:
+                embed = self._embed or get_embedding_model()
+                grounded = 0
+                weak: list[str] = []
+                for sentence, quotes in pairs:
+                    vec = embed.embed_query(sentence)
+                    best = max(_cosine(vec, q) for q in embed.embed_documents(quotes))
+                    if best >= config.GROUNDING_MIN_SIMILARITY:
+                        grounded += 1
+                    else:
+                        weak.append(f"{sentence[:60]} (유사도 {best:.2f})")
+                ratio = grounded / len(pairs)
+                method = "hybrid"
+                if ratio < config.QUALITY_MIN_GROUNDED_RATIO:
+                    issues.append(f"인용문과 이어지는 문장 비율 {ratio:.2f} < {config.QUALITY_MIN_GROUNDED_RATIO}")
+                    issues += [f"약한 연결: {w}" for w in weak[:5]]
+            except Exception as exc:  # noqa: BLE001 - 임베딩을 못 올리면 번호 검증만 반영
+                log_decision(self._trace_id, self.name, "embedding_skipped", f"{type(exc).__name__}: {exc}")
+
+        if judgment is not None:
+            method = "hybrid"
+            uncited = [s for s in judgment.sentences_without_evidence if s.strip()]
+            if uncited:
+                issues += [f"근거 없는 사실 문장: {s}" for s in uncited[:5]]
+        return CriterionResult(name="groundedness", passed=not issues, method=method, issues=issues)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _append_to_report(path: str | Path | None, verdict: EvalVerdict) -> None:
+        if not path or not Path(path).exists():
+            return
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        history = data.get("quality_eval_history", [])
+        history.append(verdict.model_dump())
+        data["quality_eval_history"] = history
+        data["quality_eval"] = verdict.model_dump()
+        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
