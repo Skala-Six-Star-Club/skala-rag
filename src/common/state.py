@@ -157,6 +157,45 @@ class JudgeFeedback(BaseModel):
     notes: str = ""
 
 
+ViewPerspective = Literal["trl", "market", "stakeholder", "domain"]
+
+
+class SubTask(BaseModel):
+    """orchestrator가 만드는 worker 실행 단위. (관점, 기술, 초점) 하나가 Send 하나임.
+    focus는 src/common/focus.py 카탈로그의 초점 id(관점 필수 항목 하나에 대응)."""
+
+    subtask_id: str
+    perspective: ViewPerspective
+    tech: str
+    focus: str
+    round: int = 0  # 0: 최초 계획, 1 이상: re-plan
+    reason: str = ""
+
+    @property
+    def node(self) -> str:
+        return f"{self.perspective}_eval"
+
+
+class Gap(BaseModel):
+    """re-plan 요청 한 건. evidence_check(근거 부족)나 quality_eval(커버리지, 편향 미달)이 씀."""
+
+    perspective: ViewPerspective
+    tech: str
+    focus: str | None = None  # None이면 orchestrator가 그 칸에서 아직 조사하지 않은 초점을 고름
+    reason: str = ""
+    source: Literal["evidence_check", "quality_eval"] = "evidence_check"
+
+
+class Plan(BaseModel):
+    """orchestrator 출력. 이번 round에 실행할 서브 태스크 목록과 계획 사유."""
+
+    round: int = 0
+    subtasks: list[SubTask] = Field(default_factory=list)
+    rationale: str = ""
+    # 계획 검증이 LLM 계획을 고친 내역(빈 칸 보정, 대칭 보정, 상한 조정 등)
+    corrections: list[str] = Field(default_factory=list)
+
+
 class AgentState(TypedDict, total=False):
     """LangGraph 그래프 전체가 공유하는 State (11장 표)."""
 
