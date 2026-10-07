@@ -101,12 +101,12 @@ class SerializedEmbeddings(Embeddings):
 
 
 @lru_cache(maxsize=1)
-def get_embedding_model() -> HuggingFaceEmbeddings:
+def get_embedding_model() -> SerializedEmbeddings:
     """채택 임베딩(config.EMBEDDING_MODEL, 기본 Qwen3-Embedding-0.6B). 벡터는 정규화 후 내적 유사도로 사용함(6.1절).
 
     EMBEDDING_DEVICE=auto(기본)면 cuda -> mps -> cpu 순으로 올림. fp16은 CUDA에서만 씀.
     """
-    return _build_embedding(config.EMBEDDING_MODEL)
+    return SerializedEmbeddings(_build_embedding(config.EMBEDDING_MODEL))
 
 
 def get_embedding_model_by_name(model_name: str) -> HuggingFaceEmbeddings:
