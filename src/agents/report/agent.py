@@ -639,6 +639,51 @@ def convert_to_pdf(report_md: str, output_path: Path = _REPORT_PDF_PATH) -> bool
     return ok
 
 
+_CRITERION_LABELS = {
+    "groundedness": "Groundedness",
+    "neutrality": "중립성",
+    "bias_control": "편향 통제",
+    "coverage": "관점 커버리지",
+}
+_METHOD_LABELS = {"rule": "규칙", "llm": "LLM Judge", "hybrid": "규칙 + LLM Judge"}
+
+
+def render_quality_result(verdict: EvalVerdict) -> str:
+    """quality_eval 최종 판정을 한계점 절의 표로 렌더링. 지적 문장의 [근거#N] 토큰은 지움."""
+    rows = ["| 항목 | 방식 | 판정 | 비고 |", "|---|---|---|---|"]
+    for c in verdict.criteria:
+        note = _CITATION_RE.sub("", c.issues[0]).replace("|", "/").strip() if c.issues else ""
+        if len(note) > 90:
+            note = note[:90] + "…"
+        extra = f" 외 {len(c.issues) - 1}건" if len(c.issues) > 1 else ""
+        rows.append(
+            f"| {_CRITERION_LABELS.get(c.name, c.name)} | {_METHOD_LABELS.get(c.method, c.method)} "
+            f"| {'통과' if c.passed else '미달'} | {note}{extra} |"
+        )
+    head = "보고서 생성 뒤 품질 평가 노드의 최종 판정임. " + (
+        "모든 항목을 통과함." if verdict.passed else "미달 항목은 Loop 예산을 소진해 그대로 남겼음."
+    )
+    return head + "\n\n" + "\n".join(rows)
+
+
+def append_quality_result(verdict: EvalVerdict, report_json_path: str | Path | None) -> bool:
+    """같은 실행의 report.md에 최종 품질 평가 결과를 REFERENCE 앞(한계점 절 끝)에 넣고 PDF를 다시 만듦."""
+    if not report_json_path:
+        return False
+    md_path = Path(report_json_path).with_suffix(".md")
+    pdf_path = Path(report_json_path).with_suffix(".pdf")
+    if not md_path.exists():
+        return False
+    md = md_path.read_text(encoding="utf-8")
+    section = f"\n### 최종 품질 평가 결과\n\n{render_quality_result(verdict)}\n"
+    marker = "\n## REFERENCE"
+    md = md.replace(marker, section + marker, 1) if marker in md else md + section
+    md_path.write_text(md, encoding="utf-8")
+    if pdf_path.exists():
+        convert_to_pdf(md, pdf_path)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # 노드
 # ---------------------------------------------------------------------------

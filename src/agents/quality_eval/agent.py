@@ -230,3 +230,170 @@ def decide_route(criteria: list[CriterionResult], gaps: list[Gap], replans_left:
     if failed & TEXT_CRITERIA and rewrites_left:
         return "synthesize"
     return "end"
+
+
+class QualityEvalAgent(BaseAgent):
+    name = "quality_eval"
+    uses_rag = False
+
+    def __init__(self, embed: Any | None = None, judge_llm: Any | None = None, use_llm: bool | None = None):
+        self._embed = embed
+        self._judge_llm = judge_llm
+        self.use_llm = config.QUALITY_USE_LLM_JUDGE if use_llm is None else use_llm
+        self._trace_id: str | None = None
+
+    def run(self, state: AgentState) -> dict[str, Any]:
+        trace_id = state.get("trace_id")
+        self._trace_id = trace_id
+        attempt = state.get("eval_count", 0)
+        report = load_report_json(state.get("report_json_path"))
+        sections: dict[str, str] = report.get("evidence_token_sections") or {}
+        evidence = list(state.get("evidence") or [])
+        evidence_by_id = {e.id: e for e in evidence if e.id is not None}
+        techs = [t.name for t in state.get("techs", []) or []]
+
+        coverage, coverage_gaps = check_coverage(sections, evidence_by_id, techs)
+        bias, bias_gaps = check_bias_control(sections, evidence_by_id, techs)
+        judgment = self._judge(sections, trace_id)
+        criteria = [
+            self._groundedness(sections, evidence_by_id, judgment),
+            self._neutrality(sections, judgment),
+            bias,
+            coverage,
+        ]
+        if not sections:
+            criteria = [
+                CriterionResult(name=c.name, passed=False, method=c.method, issues=["report.json의 평가 본문 없음"])
+                for c in criteria
+            ]
+
+        gaps = [*coverage_gaps, *bias_gaps]
+        replans = state.get("quality_replan_count", 0)
+        rewrites = state.get("quality_rewrite_count", 0)
+        route = decide_route(
+            criteria, gaps, replans < config.MAX_QUALITY_REPLANS, rewrites < config.MAX_QUALITY_REWRITES
+        )
+        passed = all(c.passed for c in criteria)
+        verdict = EvalVerdict(
+            passed=passed,
+            criteria=criteria,
+            gaps=gaps if route == "orchestrator" else [],
+            route=route,  # type: ignore[arg-type]
+            attempt=attempt,
+        )
+
+        reason = "모든 항목 통과" if passed else "; ".join(
+            f"{c.name}: {', '.join(c.issues[:2])}" for c in criteria if not c.passed
+        )
+        if not passed and route == "end":
+            reason = f"Loop 예산 소진(재계획 {replans}/{config.MAX_QUALITY_REPLANS}, 재작성 {rewrites}/{config.MAX_QUALITY_REWRITES}). {reason}"
+        log_decision(
+            trace_id, self.name, f"route={route}", reason,
+            attempt=attempt, criteria={c.name: c.passed for c in criteria},
+        )
+        self._append_to_report(state.get("report_json_path"), verdict)
+        if route == "end":
+            from src.agents.report.agent import append_quality_result
+
+            append_quality_result(verdict, state.get("report_json_path"))
+
+        updates: dict[str, Any] = {
+            "eval_result": verdict,
+            "eval_count": attempt + 1,
+            "pending_gaps": verdict.gaps,
+            "quality_replan_count": replans + (route == "orchestrator"),
+            "quality_rewrite_count": rewrites + (route == "synthesize"),
+        }
+        return updates
+
+    # -- LLM, 임베딩 판정 ---------------------------------------------------------
+
+    def _judge(self, sections: dict[str, str], trace_id: str | None) -> _NeutralityJudgment | None:
+        if not self.use_llm or not sections:
+            return None
+        text = "\n\n".join(f"[{t}]\n{sections.get(t, '')}" for t in _NARRATIVE_SECTIONS)
+        try:
+            llm = (self._judge_llm or get_judge_llm()).with_structured_output(_NeutralityJudgment)
+            judgment: _NeutralityJudgment = llm.invoke(_JUDGE_PROMPT.format(text=text))  # type: ignore[assignment]
+        except Exception as exc:  # noqa: BLE001 - 검수 모델이 없으면 규칙 판정만 반영
+            log_decision(trace_id, self.name, "llm_judge_skipped", f"{type(exc).__name__}: {exc}")
+            return None
+        judgment, dropped = verify_judgment(judgment, sections)
+        if dropped:
+            log_decision(
+                trace_id, self.name, "llm_judge_filtered",
+                f"보고서 문장과 대조되지 않거나 근거 번호가 있는 지적 {dropped}건을 버림",
+            )
+        return judgment
+
+    def _neutrality(self, sections: dict[str, str], judgment: _NeutralityJudgment | None) -> CriterionResult:
+        issues = [f"금지 표현: {s}" for s in check_biased_phrases(sections)]
+        method = "rule"
+        if judgment is not None:
+            method = "hybrid"
+            # 한 기술의 한계만 서술하거나 두 기술을 대비하는 문장까지 잡는 과잉 지적을 줄이려고
+            # 우열 판정, 도입 추천으로 분류된 문장만 위반으로 셈
+            issues += [
+                f"LLM 지적({f.kind}): {f.sentence}"
+                for f in judgment.biased_sentences
+                if f.kind != "해당 없음" and f.sentence.strip()
+            ]
+        return CriterionResult(name="neutrality", passed=not issues, method=method, issues=issues)  # type: ignore[arg-type]
+
+    def _groundedness(
+        self,
+        sections: dict[str, str],
+        evidence_by_id: dict[int, Evidence],
+        judgment: _NeutralityJudgment | None,
+    ) -> CriterionResult:
+        issues: list[str] = []
+        all_ids = {i for body in sections.values() for i in _cited_ids(body)}
+        invalid = sorted(all_ids - set(evidence_by_id))
+        if invalid:
+            issues.append(f"존재하지 않는 근거 번호 인용: {invalid}")
+
+        method = "rule"
+        pairs: list[tuple[str, list[str]]] = []
+        for title in _NARRATIVE_SECTIONS:
+            for sentence in _sentences(sections.get(title, "")):
+                ids = [i for i in _cited_ids(sentence) if i in evidence_by_id]
+                quotes = [evidence_by_id[i].quote for i in ids if evidence_by_id[i].quote]
+                if quotes:
+                    pairs.append((_CITATION_RE.sub("", sentence).strip(), quotes))
+        if pairs:
+            try:
+                embed = self._embed or get_embedding_model()
+                grounded = 0
+                weak: list[str] = []
+                for sentence, quotes in pairs:
+                    vec = embed.embed_query(sentence)
+                    best = max(_cosine(vec, q) for q in embed.embed_documents(quotes))
+                    if best >= config.GROUNDING_MIN_SIMILARITY:
+                        grounded += 1
+                    else:
+                        weak.append(f"{sentence[:60]} (유사도 {best:.2f})")
+                ratio = grounded / len(pairs)
+                method = "hybrid"
+                if ratio < config.QUALITY_MIN_GROUNDED_RATIO:
+                    issues.append(f"인용문과 이어지는 문장 비율 {ratio:.2f} < {config.QUALITY_MIN_GROUNDED_RATIO}")
+                    issues += [f"약한 연결: {w}" for w in weak[:5]]
+            except Exception as exc:  # noqa: BLE001 - 임베딩을 못 올리면 번호 검증만 반영
+                log_decision(self._trace_id, self.name, "embedding_skipped", f"{type(exc).__name__}: {exc}")
+
+        if judgment is not None:
+            method = "hybrid"
+            uncited = [s for s in judgment.sentences_without_evidence if s.strip()]
+            if uncited:
+                issues += [f"근거 없는 사실 문장: {s}" for s in uncited[:5]]
+        return CriterionResult(name="groundedness", passed=not issues, method=method, issues=issues)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _append_to_report(path: str | Path | None, verdict: EvalVerdict) -> None:
+        if not path or not Path(path).exists():
+            return
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        history = data.get("quality_eval_history", [])
+        history.append(verdict.model_dump())
+        data["quality_eval_history"] = history
+        data["quality_eval"] = verdict.model_dump()
+        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
