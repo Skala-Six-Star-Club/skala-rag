@@ -2,8 +2,8 @@
 
 SW(TurboQuant)와 HW(ITME) 두 KV cache 최적화 기술을, 기술 성숙도·시장성·이해관계자·
 도메인 적용 네 관점에서 비교하는 LangGraph 기반 Multi-Agent 평가 보고서 생성기.
-설계 근거는 [docs/agentic-rag-design.md](docs/agentic-rag-design.md), 테스트 계획은
-[docs/schedule.md](docs/schedule.md) 참고.
+설계 근거는 [docs/agentic-rag-design.md](agentic-rag-design.md), 테스트 계획은
+[docs/schedule.md](schedule.md) 참고.
 
 ## 목차
 
@@ -102,9 +102,9 @@ Query Rewriting은 에이전트가 실제로 던지는 질의 유형이 달라 �
 | 임베딩(MRR, camp 전체) | bge-m3 0.844 / multilingual-e5-large 0.867 / **Qwen3-Embedding-0.6B 0.892** |
 | Query Rewriting(MRR, camp 전체) | 원본 1.000 vs 리라이팅 0.964 |
 
-![tech_research 청킹 비교](scripts/tech_research/report_assets/chunking_comparison.png)
-![tech_research 임베딩 비교](scripts/tech_research/report_assets/embedding_comparison.png)
-![tech_research Query Rewriting 비교](scripts/tech_research/report_assets/query_rewriting_comparison.png)
+![tech_research 청킹 비교](../scripts/tech_research/report_assets/chunking_comparison.png)
+![tech_research 임베딩 비교](../scripts/tech_research/report_assets/embedding_comparison.png)
+![tech_research Query Rewriting 비교](../scripts/tech_research/report_assets/query_rewriting_comparison.png)
 
 #### trl_eval
 
@@ -114,9 +114,9 @@ Query Rewriting은 에이전트가 실제로 던지는 질의 유형이 달라 �
 | 임베딩(MRR, camp 전체) | bge-m3 0.844 / multilingual-e5-large 0.867 / **Qwen3-Embedding-0.6B 0.892** |
 | Query Rewriting(MRR, camp 전체) | 원본 0.750 vs **리라이팅 0.833** |
 
-![trl_eval 청킹 비교](scripts/trl_eval/report_assets/chunking_comparison.png)
-![trl_eval 임베딩 비교](scripts/trl_eval/report_assets/embedding_comparison.png)
-![trl_eval Query Rewriting 비교](scripts/trl_eval/report_assets/query_rewriting_comparison.png)
+![trl_eval 청킹 비교](../scripts/trl_eval/report_assets/chunking_comparison.png)
+![trl_eval 임베딩 비교](../scripts/trl_eval/report_assets/embedding_comparison.png)
+![trl_eval Query Rewriting 비교](../scripts/trl_eval/report_assets/query_rewriting_comparison.png)
 
 #### domain_eval
 
@@ -126,9 +126,9 @@ Query Rewriting은 에이전트가 실제로 던지는 질의 유형이 달라 �
 | 임베딩(MRR, camp 전체) | bge-m3 0.844 / multilingual-e5-large 0.867 / **Qwen3-Embedding-0.6B 0.892** |
 | Query Rewriting(MRR, camp 전체) | 원본 0.857 vs 리라이팅 0.786 |
 
-![domain_eval 청킹 비교](scripts/domain_eval/report_assets/chunking_comparison.png)
-![domain_eval 임베딩 비교](scripts/domain_eval/report_assets/embedding_comparison.png)
-![domain_eval Query Rewriting 비교](scripts/domain_eval/report_assets/query_rewriting_comparison.png)
+![domain_eval 청킹 비교](../scripts/domain_eval/report_assets/chunking_comparison.png)
+![domain_eval 임베딩 비교](../scripts/domain_eval/report_assets/embedding_comparison.png)
+![domain_eval Query Rewriting 비교](../scripts/domain_eval/report_assets/query_rewriting_comparison.png)
 
 #### 최종 채택 및 근거
 
@@ -303,8 +303,8 @@ skala-rag/
 | `select_tech` | 단위 테스트 4건 전부 PASS |
 | `evidence_check` | 단위 테스트 10건 전부 PASS(3규칙 + 그라운딩 검증 + confidence 계산) |
 
-![select_tech 단위 테스트](scripts/select_tech/report_assets/unit_checks.png)
-![evidence_check 단위 테스트](scripts/evidence_check/report_assets/unit_checks.png)
+![select_tech 단위 테스트](../scripts/select_tech/report_assets/unit_checks.png)
+![evidence_check 단위 테스트](../scripts/evidence_check/report_assets/unit_checks.png)
 
 ### 4.3 생성 평가 에이전트 (`market_eval` / `stakeholder_eval` / `synthesize`)
 
@@ -320,11 +320,11 @@ LLM에 참고자료로만 제공하되, 기술 간 우열 판단에는 못 쓰�
 | `stakeholder_eval` | 8.2 루브릭(TurboQuant·ITME 전부 5/5/5/5) + 9.3절 필수 항목 커버리지(둘 다 1.00) |
 | `synthesize` | 8.2 루브릭 4항목 전부 5점 |
 
-![market_eval 필수 항목 커버리지](scripts/market_eval/report_assets/coverage.png)
-![market_eval 루브릭 점수](scripts/market_eval/report_assets/rubric_scores.png)
-![stakeholder_eval 필수 항목 커버리지](scripts/stakeholder_eval/report_assets/coverage.png)
-![stakeholder_eval 루브릭 점수](scripts/stakeholder_eval/report_assets/rubric_scores.png)
-![synthesize 루브릭 점수](scripts/synthesize/report_assets/rubric_scores.png)
+![market_eval 필수 항목 커버리지](../scripts/market_eval/report_assets/coverage.png)
+![market_eval 루브릭 점수](../scripts/market_eval/report_assets/rubric_scores.png)
+![stakeholder_eval 필수 항목 커버리지](../scripts/stakeholder_eval/report_assets/coverage.png)
+![stakeholder_eval 루브릭 점수](../scripts/stakeholder_eval/report_assets/rubric_scores.png)
+![synthesize 루브릭 점수](../scripts/synthesize/report_assets/rubric_scores.png)
 
 ### 4.4 검수·보고서 에이전트 (`judge` / `report`)
 
@@ -339,8 +339,8 @@ LLM에 참고자료로만 제공하되, 기술 간 우열 판단에는 못 쓰�
 | `judge` | 순수함수(`judge_passed`) 4건 + Qwen3-8B 스팟체크 6건 전부 PASS |
 | `report` | 인용 안전장치·챕터 직렬화·REFERENCE 표기·JSON/PDF 단위 테스트 전부 PASS |
 
-![judge 단위 테스트](scripts/judge/report_assets/unit_checks.png)
-![report 인용 안전장치 테스트](scripts/report/report_assets/citation_checks.png)
+![judge 단위 테스트](../scripts/judge/report_assets/unit_checks.png)
+![report 인용 안전장치 테스트](../scripts/report/report_assets/citation_checks.png)
 
 ---
 
