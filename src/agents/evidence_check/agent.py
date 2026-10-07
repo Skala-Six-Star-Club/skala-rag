@@ -119,7 +119,7 @@ def _filter_view_result(
             counter_facts=kept_counter,
             unconfirmed_items=tech_result.unconfirmed_items,
         )
-    return ViewResult(by_tech=new_by_tech)
+    return ViewResult(by_tech=new_by_tech, replace=True)
 
 
 def _has_claims(view_result: ViewResult) -> bool:
