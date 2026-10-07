@@ -100,3 +100,36 @@ TARGET_EVIDENCE_COUNT = int(os.getenv("TARGET_EVIDENCE_COUNT", "5"))
 #   none:    본문에서 인용 표기를 모두 제거(REFERENCE 절과 report.json의 근거 번호는 유지)
 #   raw:     [근거#N] 토큰을 그대로 둠(디버깅용)
 REPORT_CITATION_STYLE = os.getenv("REPORT_CITATION_STYLE", "numeric").strip().lower()
+# 관점별 평가 절에서 (관점, 기술) 칸당 싣는 주장 수 상한. 보고서 10장 상한을 지키기 위함(0이면 제한 없음)
+REPORT_MAX_CLAIMS_PER_CELL = int(os.getenv("REPORT_MAX_CLAIMS_PER_CELL", "5"))
+
+# Orchestrator-Workers
+# orchestrator 모드: llm(기본, 생성 LLM이 칸별 초점을 고르고 계획 검증이 대칭, 커버리지, 상한을 보정) / rule(칸마다 기본 초점 하나)
+PLANNER_MODE = os.getenv("PLANNER_MODE", "llm").strip().lower()
+# 한 round의 서브 태스크 상한. 계획 검증이 칸마다 최소 1개를 보장하므로 관점 4 x 기술 N개 이상이어야 함
+MAX_SUBTASKS = int(os.getenv("MAX_SUBTASKS", "16"))
+# worker 실패 시 같은 서브 태스크 재시도 횟수. 소진하면 제외하고 보고서 한계점에 기록
+WORKER_MAX_RETRIES = int(os.getenv("WORKER_MAX_RETRIES", "1"))
+# 품질 평가 미달 시 Loop 예산. 조사 부족(커버리지, 편향 통제)의 재계획과 서술 문제(Groundedness,
+# 중립성)의 재작성을 따로 셈. 한쪽 예산을 쓴 뒤에도 다른 쪽 문제를 고칠 기회가 남음
+MAX_QUALITY_REPLANS = int(os.getenv("MAX_QUALITY_REPLANS", "1"))
+MAX_QUALITY_REWRITES = int(os.getenv("MAX_QUALITY_REWRITES", "1"))
+# 노드 실행 수 상한(종료 가드). 넘으면 남은 Loop를 건너뛰고 종료 쪽으로 진행
+MAX_STEPS = int(os.getenv("MAX_STEPS", "80"))
+RECURSION_LIMIT = int(os.getenv("RECURSION_LIMIT", "100"))
+
+# 관측성과 재개
+DECISION_LOG_DIR = Path(os.getenv("DECISION_LOG_DIR", "./output/logs"))
+# sqlite(기본, langgraph-checkpoint-sqlite 필요, 없으면 memory로 대체) / memory / none
+CHECKPOINTER = os.getenv("CHECKPOINTER", "sqlite").strip().lower()
+CHECKPOINT_DB_PATH = Path(os.getenv("CHECKPOINT_DB_PATH", "./output/checkpoints.sqlite"))
+
+# 품질 평가(quality_eval) 규칙 임계값
+# 편향 통제: (관점, 기술)별 보고서가 인용한 서로 다른 출처의 최소 수
+QUALITY_MIN_SOURCES = int(os.getenv("QUALITY_MIN_SOURCES", "2"))
+# 편향 통제: 두 기술의 인용 근거 수 비율 상한(evidence_check 규칙 3과 같은 값)
+QUALITY_MAX_RATIO = float(os.getenv("QUALITY_MAX_RATIO", "2.0"))
+# Groundedness: 인용이 붙은 문장 중 인용문과 의미가 이어지는 문장의 최소 비율
+QUALITY_MIN_GROUNDED_RATIO = float(os.getenv("QUALITY_MIN_GROUNDED_RATIO", "0.8"))
+# 중립성 LLM Judge 사용 여부(1). 0이면 규칙(금지 표현 목록)만으로 판정
+QUALITY_USE_LLM_JUDGE = os.getenv("QUALITY_USE_LLM_JUDGE", "1") == "1"
