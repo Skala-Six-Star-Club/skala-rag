@@ -168,3 +168,16 @@ def check_bias_control(sections: dict[str, str], evidence_by_id: dict[int, Evide
     for g in gaps:
         unique.setdefault((g.perspective, g.tech, g.focus), g)
     return CriterionResult(name="bias_control", passed=not issues, method="rule", issues=issues), list(unique.values())
+
+
+def check_biased_phrases(sections: dict[str, str]) -> list[str]:
+    hits = []
+    for title in (*_NARRATIVE_SECTIONS, _VIEW_SECTION):
+        for sentence in _sentences(sections.get(title, "")):
+            if any(re.search(p, sentence) for p in _BIASED_PATTERNS):
+                hits.append(sentence)
+    return hits
+
+
+DATA_CRITERIA = {"coverage", "bias_control"}
+TEXT_CRITERIA = {"groundedness", "neutrality"}
