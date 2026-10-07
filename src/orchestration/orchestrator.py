@@ -149,3 +149,26 @@ def validate_plan(picks: list[_Pick], techs: list[str], max_subtasks: int) -> tu
 
     subtasks = [_subtask(0, p, t, f, reasons[(p, f, t)]) for p, f, t in ordered]
     return subtasks, corrections
+
+
+def _executed(state: AgentState) -> set[tuple[str, str, str]]:
+    """지금까지 실행을 마친 (관점, 초점, 기술). node_status의 subtask_id에서 읽음."""
+    done: set[tuple[str, str, str]] = set()
+    for subtask_id, status in (state.get("node_status") or {}).items():
+        parts = subtask_id.split(":", 3)
+        if len(parts) == 4 and status == "done":
+            _, perspective, focus, tech = parts
+            done.add((perspective, focus, tech))
+    return done
+
+
+def _format_profiles(profiles: dict[str, TechProfile]) -> str:
+    if not profiles:
+        return "(기술 조사 결과 없음)"
+    blocks = []
+    for name, p in profiles.items():
+        p = p if isinstance(p, TechProfile) else TechProfile.model_validate(p)
+        blocks.append(
+            f"- {name}\n  개요: {p.overview}\n  적용 범위: {p.scope}\n  한계: {p.limitations}\n  차별점: {p.differentiation}"
+        )
+    return "\n".join(blocks)
