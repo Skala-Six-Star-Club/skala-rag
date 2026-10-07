@@ -8,9 +8,11 @@
 from __future__ import annotations
 
 import gc
+import threading
 from functools import lru_cache
 from typing import Any
 
+from langchain_core.embeddings import Embeddings
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
@@ -74,13 +76,37 @@ def _build_embedding(model_name: str) -> HuggingFaceEmbeddings:
     )
 
 
+class SerializedEmbeddings(Embeddings):
+    """임베딩 호출을 한 번에 하나씩만 실행하는 래퍼.
+
+    Send 병렬 worker가 같은 모델로 동시에 질의를 임베딩하면 Apple Silicon(MPS)에서 Metal
+    command buffer 단언 실패로 프로세스가 종료됨(worker Fall-back으로도 잡히지 않는 SIGABRT).
+    임베딩은 짧은 연산이라 직렬화해도 LLM, 웹 검색 대기 시간에 비해 지연이 작음.
+    """
+
+    def __init__(self, inner: HuggingFaceEmbeddings):
+        self._inner = inner
+        self._lock = threading.Lock()
+
+    def embed_query(self, text: str) -> list[float]:
+        with self._lock:
+            return self._inner.embed_query(text)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        with self._lock:
+            return self._inner.embed_documents(texts)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
 @lru_cache(maxsize=1)
-def get_embedding_model() -> HuggingFaceEmbeddings:
+def get_embedding_model() -> SerializedEmbeddings:
     """채택 임베딩(config.EMBEDDING_MODEL, 기본 Qwen3-Embedding-0.6B). 벡터는 정규화 후 내적 유사도로 사용함(6.1절).
 
     EMBEDDING_DEVICE=auto(기본)면 cuda -> mps -> cpu 순으로 올림. fp16은 CUDA에서만 씀.
     """
-    return _build_embedding(config.EMBEDDING_MODEL)
+    return SerializedEmbeddings(_build_embedding(config.EMBEDDING_MODEL))
 
 
 def get_embedding_model_by_name(model_name: str) -> HuggingFaceEmbeddings:
