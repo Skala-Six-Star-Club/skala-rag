@@ -45,3 +45,48 @@ def wrap_node(node_name: str, node: NodeFn, *, finalizer: bool = False) -> NodeF
 
     wrapped.__name__ = f"{node_name}_node"
     return wrapped
+
+
+def with_fallback(node_name: str, node: NodeFn, *, max_retries: int | None = None) -> NodeFn:
+    """worker 노드에 재시도 후 제외 Fall-back을 붙임."""
+
+    retries = config.WORKER_MAX_RETRIES if max_retries is None else max_retries
+
+    def guarded(state: AgentState) -> dict[str, Any]:
+        subtask = state.get("subtask")
+        subtask_id = subtask.subtask_id if subtask is not None else node_name
+        trace_id = state.get("trace_id")
+        error = ""
+        errors: dict[str, str] = {}
+        for attempt in range(retries + 1):
+            try:
+                update = dict(node(state) or {})
+            except Exception as exc:  # noqa: BLE001 - worker 하나의 실패가 그래프 전체를 멈추지 않게 함
+                error = f"{type(exc).__name__}: {exc}"
+                errors[subtask_id] = error
+                log_decision(
+                    trace_id, node_name, "worker_failed", error, subtask_id=subtask_id, attempt=attempt
+                )
+                continue
+            if attempt:
+                log_decision(trace_id, node_name, "retry_succeeded", f"{attempt}회 재시도 후 성공", subtask_id=subtask_id)
+            update["node_status"] = {subtask_id: "done"}
+            if errors:
+                update["task_errors"] = errors
+            return update
+
+        log_decision(
+            trace_id, node_name, "exclude",
+            f"{retries}회 재시도 후에도 실패해 제외하고 나머지 결과로 진행", subtask_id=subtask_id,
+        )
+        update: dict[str, Any] = {
+            "node_status": {subtask_id: "excluded"},
+            "task_errors": errors,
+            "last_error": f"{subtask_id}: {error}",
+        }
+        if subtask is not None:
+            update["excluded_subtasks"] = [subtask]
+        return update
+
+    guarded.__name__ = f"{node_name}_guarded"
+    return guarded
