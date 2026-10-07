@@ -46,7 +46,8 @@ _PROMPT_TEMPLATE = """\
 출력 규칙:
 1. 모든 문장은 text(근거 번호 표기 없이 한 문장)와 evidence_ids(그 문장의 근거가 된 번호 목록)로 나눠 씀
 2. evidence_ids에는 아래 평가 결과에 실제로 적힌 근거 번호만 넣음. 근거 번호를 댈 수 없는 문장은 쓰지 않음
-3. 여러 관점의 사실을 묶는 문장이면 각 관점의 근거 번호를 모두 넣음
+3. 여러 관점의 사실을 묶는 문장이면 각 관점의 대표 근거 번호를 넣되, 한 문장의 evidence_ids는 5개 이하
+4. 문장 끝은 "~함", "~임", "~됨"처럼 명사형으로 맺고 "~다", "~습니다"는 쓰지 않음
 
 {views}
 
@@ -107,9 +108,13 @@ def format_views(state: AgentState) -> str:
     return "\n\n".join(blocks)
 
 
+# 한 문장에 근거 번호가 많으면 어느 근거가 무엇을 뒷받침하는지 읽히지 않으므로 앞 번호만 남김
+_MAX_IDS_PER_SENTENCE = 5
+
+
 def render_sentence(sentence: _CitedSentence, valid_ids: set[int]) -> str | None:
     """실제 근거 번호가 하나 이상 있는 문장만 "문장 [근거#3][근거#7]." 형태로 돌려줌. 없으면 None."""
-    ids = [i for i in dict.fromkeys(sentence.evidence_ids) if i in valid_ids]
+    ids = [i for i in dict.fromkeys(sentence.evidence_ids) if i in valid_ids][:_MAX_IDS_PER_SENTENCE]
     text = strip_citation_tokens(sentence.text).strip().rstrip(".")
     if not ids or not text:
         return None

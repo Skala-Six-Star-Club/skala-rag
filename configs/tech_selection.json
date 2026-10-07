@@ -5,13 +5,15 @@
       "name": "TurboQuant",
       "camp": "SW",
       "role": "target",
-      "search_anchor": "Google"
+      "search_anchor": "Google",
+      "keywords": ["TurboQuant", "터보퀀트", "KV cache quantization", "KV 캐시 양자화"]
     },
     {
       "name": "ITME",
       "camp": "HW",
       "role": "target",
-      "search_anchor": "SK hynix"
+      "search_anchor": "SK hynix CXL",
+      "keywords": ["ITME", "CXL", "CMM"]
     }
   ]
 }

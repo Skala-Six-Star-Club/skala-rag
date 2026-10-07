@@ -21,7 +21,7 @@ RAG 실습 당시의 README(비교실험, 에이전트별 테스트 결과)는 [
 ## Features
 
 - PDF 자료 기반 정보 추출 : arXiv 논문 6편(136쪽)을 절 인식 청킹으로 색인해 tech_research, trl_eval, domain_eval이 검색
-- 웹 검색 : Tavily, 0건이면 한국어, 영어, 앵커 제거 순서의 질의 사다리와 DuckDuckGo 폴백
+- 웹 검색 : Tavily, 0건이면 한국어, 영어, 앵커 제거 순서의 질의 사다리와 DuckDuckGo 폴백. 제목과 본문에 기술 키워드(`configs/tech_selection.json`의 `keywords`)가 없는 결과와 SNS, 영상, 위키 출처는 근거에서 제외
 - 동적 계획 : orchestrator(생성 LLM)가 칸마다 1~3개의 초점을 골라 계획을 세우고, 계획 검증이 카탈로그 밖 초점 제거, 대칭 보정(두 기술 동일 초점), 필수 초점(TRL 구간 추정), 빈 칸 보정, 균형 보정(반대 근거 초점만 있는 칸에 기본 초점 추가), 상한 조정을 수행. 초점과 질의 템플릿은 `src/common/focus.py` 카탈로그가 정본
 - Fall-back : worker 실패 시 1회 재시도 후 제외하고 나머지 결과로 진행. 제외된 조사는 보고서 한계점에 기재
 - 확증 편향 방지 전략 : 두 기술에 같은 질의 템플릿, 관점마다 반대 근거 전용 초점, evidence_check의 근거 수와 기술 간 비율 규칙, 생성과 다른 계열의 검수 모델
@@ -102,7 +102,7 @@ graph TD
 ```
 ├── app.py                     # 실행 스크립트 (실행, 재개)
 ├── configs/tech_selection.json  # 선정 기술과 도메인 (Human 기반 선정)
-├── data/doc_pool/             # 문서 풀 (arXiv PDF 6편, git 미추적)
+├── data/doc_pool/             # 문서 풀 (arXiv PDF 6편)
 ├── src/
 │   ├── graph.py               # 그래프 조립과 통합 실행
 │   ├── orchestration/         # 조정 계층

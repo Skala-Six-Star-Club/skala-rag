@@ -29,6 +29,12 @@ class TechSpec(BaseModel):
     camp: Camp
     role: Role
     search_anchor: str  # market_eval/stakeholder_eval 웹 검색용 앵커 키워드 (7.1, 7.5)
+    # 웹 검색 결과의 관련성 판정 키워드. 제목이나 본문에 하나도 없으면 근거로 쓰지 않음
+    keywords: list[str] = Field(default_factory=list)
+
+    @property
+    def relevance_keywords(self) -> list[str]:
+        return self.keywords or [self.name]
 
 
 class Evidence(BaseModel):
