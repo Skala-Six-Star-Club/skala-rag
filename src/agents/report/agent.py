@@ -493,8 +493,20 @@ def build_report_json(
     cited_ids: set[int],
     judge_feedback: JudgeFeedback | None,
     generated_at: str,
+    evidence_token_sections: dict[str, str] | None = None,
+    trace_id: str | None = None,
+    excluded_subtasks: list[SubTask] | None = None,
+    run_id: str | None = None,
+    tasks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
+        "trace_id": trace_id,
+        "run_id": run_id,
+        # 모든 round의 서브 태스크와 상태. 무엇을 왜 어느 worker에 보냈는지 trace와 대조하는 용도
+        "tasks": tasks or [],
+        # quality_eval이 인용과 근거를 대조하는 원본. [근거#N] 토큰이 보고서 표기로 바뀌기 전 본문
+        "evidence_token_sections": evidence_token_sections or {},
+        "excluded_subtasks": [s.model_dump() for s in excluded_subtasks or []],
         "generated_at": generated_at,
         "domain": domain,
         "techs": [t.model_dump() for t in techs],
@@ -508,6 +520,14 @@ def build_report_json(
 
 def write_report_json(data: dict[str, Any], path: Path = _REPORT_JSON_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    # 품질 평가 Loop로 보고서를 다시 쓰면 같은 실행의 이전 평가 이력을 이어 붙임
+    if path.exists() and data.get("trace_id"):
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            previous = {}
+        if previous.get("trace_id") == data["trace_id"] and previous.get("quality_eval_history"):
+            data["quality_eval_history"] = previous["quality_eval_history"]
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -622,6 +642,7 @@ class ReportAgent(BaseAgent):
         references = filter_references(state.get("references", []), cited_sources)
         references = order_references_by_citation(references, cited_order, state.get("evidence", []))
 
+        token_sections = dict(polished_sections)
         # 검증·집계가 끝난 뒤에만 [근거#N]을 보고서 표기([1, p.3] 등)로 바꿈
         evidence_all = state.get("evidence", [])
         polished_sections = {
@@ -646,6 +667,14 @@ class ReportAgent(BaseAgent):
                 cited_ids=cited_ids,
                 judge_feedback=judge_feedback,
                 generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                evidence_token_sections=token_sections,
+                trace_id=state.get("trace_id"),
+                excluded_subtasks=state.get("excluded_subtasks"),
+                run_id=state.get("run_id"),
+                tasks=[
+                    {**s.model_dump(), "status": (state.get("node_status") or {}).get(s.subtask_id, "pending")}
+                    for s in state.get("planned_subtasks", []) or []
+                ],
             ),
             _REPORT_JSON_PATH,
         )
