@@ -181,3 +181,43 @@ def check_biased_phrases(sections: dict[str, str]) -> list[str]:
 
 DATA_CRITERIA = {"coverage", "bias_control"}
 TEXT_CRITERIA = {"groundedness", "neutrality"}
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[\s\W_]+", "", _CITATION_RE.sub("", text))
+
+
+def match_sentence(flag: str, sentences: list[str]) -> str | None:
+    """LLM이 지적한 문장을 실제 평가 대상 문장과 대조함. 찾지 못하면 None(LLM이 지어낸 지적).
+
+    검수 모델이 프롬프트 예시나 다른 문장을 베껴 오는 경우가 있어, 앞 20자(공백, 기호 제외)가
+    실제 문장에 들어 있거나 실제 문장의 앞 20자가 지적 문장에 들어 있을 때만 같은 문장으로 봄.
+    """
+    key = _norm(flag)[:20]
+    if len(key) < 8:
+        return None
+    for sentence in sentences:
+        norm = _norm(sentence)
+        if key in norm or (len(norm) >= 8 and norm[:20] in _norm(flag)):
+            return sentence
+    return None
+
+
+def verify_judgment(judgment: "_NeutralityJudgment", sections: dict[str, str]) -> tuple["_NeutralityJudgment", int]:
+    """실제 문장과 대조되지 않는 지적, 근거 번호가 있는데 근거 없다고 한 지적을 버림. (검증된 판정, 버린 수)."""
+    sentences = [s for t in _NARRATIVE_SECTIONS for s in _sentences(sections.get(t, ""))]
+    dropped = 0
+    biased = []
+    for flag in judgment.biased_sentences:
+        if match_sentence(flag.sentence, sentences) is None:
+            dropped += 1
+        else:
+            biased.append(flag)
+    uncited = []
+    for flag in judgment.sentences_without_evidence:
+        matched = match_sentence(flag, sentences)
+        if matched is None or _CITATION_RE.search(matched):
+            dropped += 1
+        else:
+            uncited.append(flag)
+    return judgment.model_copy(update={"biased_sentences": biased, "sentences_without_evidence": uncited}), dropped
