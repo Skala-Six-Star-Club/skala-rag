@@ -137,3 +137,33 @@ FOCI: dict[str, dict[str, FocusSpec]] = {
         ),
     },
 }
+
+# 계획 검증이 빈 칸을 채울 때 쓰는 초점. 관점의 핵심 질문에 가장 직접 답하는 항목
+DEFAULT_FOCUS: dict[str, str] = {
+    "trl": "estimate",
+    "market": "adoption",
+    "stakeholder": "competitor",
+    "domain": "cache_reuse",
+}
+# 칸마다 반드시 포함해야 하는 초점. TRL은 공개 정보 기반 추정 구간을 보고서에 명시해야 함
+REQUIRED_FOCUS: dict[str, str] = {"trl": "estimate"}
+
+
+def get_focus(perspective: str, focus: str) -> FocusSpec:
+    return FOCI[perspective][focus]
+
+
+def is_valid_focus(perspective: str, focus: str) -> bool:
+    return perspective in FOCI and focus in FOCI[perspective]
+
+
+def non_counter_foci(perspective: str) -> list[str]:
+    return [f for f in FOCI[perspective] if f != COUNTER]
+
+
+def format_catalog() -> str:
+    return "\n".join(
+        f"- {perspective}/{spec.id}: {spec.desc}"
+        for perspective, foci in FOCI.items()
+        for spec in foci.values()
+    )
