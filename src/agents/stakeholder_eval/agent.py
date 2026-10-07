@@ -16,30 +16,23 @@ from __future__ import annotations
 from typing import Any
 
 from src.common.base_agent import BaseAgent
+from src.common.focus import COUNTER, FOCI, non_counter_foci
 from src.common.state import AgentState, Evidence, Reference, TechViewResult, ViewResult
 from src.common.tools import extract_view_result, web_reference, web_search_ladder
 
-_QUERY_TEMPLATES = [
-    "{tech} {anchor} 경쟁 기술 반응",
-    "{tech} {anchor} 개발자 커뮤니티 반응",
-    "{tech} {anchor} 투자 업계 평가",
-]
-
-# 9.3절 평가 기준: 완전성(8.2) 채점 시 빠짐없이 다뤄야 하는 필수 항목
-REQUIRED_ITEMS = [
-    "경쟁 진영의 반응과 대응 기술",
-    "도입 기업과 개발자의 의견과 도입 장벽",
-    "투자 업계의 평가",
-]
-# 0건 분기용 질의 사다리. 한국어 기본 질의(_QUERY_TEMPLATES, 8.3절 Tool Calling
-# Accuracy 기준)가 0건이면 같은 뜻의 영어 질의, 그다음 앵커를 뺀 질의 순으로 넓힘.
-# 두 기술에 같은 사다리를 적용하므로 10장 대칭 질의 원칙은 유지됨.
-_QUERY_TEMPLATES_EN = ['"{tech}" {anchor} competitors response', '"{tech}" {anchor} developer community reaction', '"{tech}" {anchor} investors analysts']
-# 재검색(12장 반복 1) 초점: 한계·비판·우려를 직접 묻는 질의로 바꿔 반대 근거를 보강함
-_RETRY_TEMPLATES = ['{tech} {anchor} 경쟁사 반박', '{tech} {anchor} 개발자 불만 한계', '{tech} {anchor} 투자 리스크']
-_RETRY_TEMPLATES_EN = ['"{tech}" {anchor} competitor rebuttal', '"{tech}" {anchor} developer complaints limitations', '"{tech}" {anchor} investment risk']
+# 질의와 필수 항목은 src/common/focus.py 카탈로그가 정본. 초점 하나가 필수 항목 하나에 대응함.
+# 단독 실행(서브 태스크 없음)은 기존처럼 필수 항목 전체의 질의를 한 번에 돌림.
+_BASE_FOCI = non_counter_foci("stakeholder")
+_QUERY_TEMPLATES = [FOCI["stakeholder"][f].web[0][0] for f in _BASE_FOCI]
+# 0건 분기용 질의 사다리. 한국어 기본 질의가 0건이면 같은 뜻의 영어 질의, 그다음 앵커를 뺀 질의 순으로
+# 넓힘. 두 기술에 같은 사다리를 적용하므로 10장 대칭 질의 원칙은 유지됨.
+_QUERY_TEMPLATES_EN = [FOCI["stakeholder"][f].web[0][1] for f in _BASE_FOCI]
+# 9장 평가 기준: 완전성(8.2) 채점 시 빠짐없이 다뤄야 하는 필수 항목
+REQUIRED_ITEMS = [FOCI["stakeholder"][f].items[0] for f in _BASE_FOCI]
 PERSPECTIVE_LABEL = "이해관계자"
 MAX_RESULTS_PER_QUERY = 3
+# 초점의 질의가 하나뿐이면 그 질의에서 결과를 더 받아 칸당 근거 수를 맞춤
+SINGLE_QUERY_MAX_RESULTS = 5
 
 
 class StakeholderEvalAgent(BaseAgent):
