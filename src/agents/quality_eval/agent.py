@@ -72,3 +72,14 @@ kind는 "우열 판정"(두 기술 중 하나가 전반적으로 낫다고 결�
 ===== 검사 대상 =====
 {text}
 """
+
+
+class _BiasFlag(BaseModel):
+    sentence: str
+    kind: Literal["우열 판정", "도입 추천", "해당 없음"]
+
+
+class _NeutralityJudgment(BaseModel):
+    biased_sentences: list[_BiasFlag] = Field(default_factory=list)
+    sentences_without_evidence: list[str] = Field(default_factory=list)
+    notes: str = ""
