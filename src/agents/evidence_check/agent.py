@@ -246,4 +246,17 @@ class EvidenceCheckAgent(BaseAgent):
         updates["retry_scopes"] = retry_scopes
         updates["retry_count"] = retry_count + (1 if retry_targets else 0)
         updates["perspective_confidence"] = confidence
+        updates["pending_gaps"] = gaps
+        if gaps:
+            log_decision(
+                state.get("trace_id"), self.name, "replan",
+                "근거 부족 (관점, 기술)을 orchestrator에 재계획 요청",
+                gaps=[g.model_dump() for g in gaps],
+            )
+        else:
+            log_decision(
+                state.get("trace_id"), self.name, "finalize",
+                "근거 충분" if budget_left else "재검색 예산 소진, 부족 항목은 미확인으로 진행",
+                retry_count=retry_count,
+            )
         return updates
