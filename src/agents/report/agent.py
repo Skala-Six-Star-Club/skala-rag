@@ -436,6 +436,13 @@ def render_limitations(
             lines.append(f"- 검수 비고: {judge_feedback.notes.strip()}")
         parts.append("### 중립성 검수 결과\n\n" + "\n".join(lines))
 
+    if eval_result is not None and not eval_result.passed:
+        issues = "\n".join(f"- {c.name}: {'; '.join(c.issues)}" for c in eval_result.criteria if not c.passed)
+        parts.append(
+            "### 이전 품질 평가에서 지적된 사항\n\n"
+            f"직전 보고서 품질 평가에서 아래 항목이 미달해 재조사 또는 재작성을 거침.\n\n{issues}"
+        )
+
     return "\n\n".join(parts)
 
 
