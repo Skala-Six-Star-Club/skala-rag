@@ -31,30 +31,41 @@ _PERSPECTIVE_ORDER = {
 }
 
 
+
+
 def make_provisional_key(
     perspective: str,
     tech: str,
     *,
     attempt: int = 0,
     ordinal: int,
+    focus: str | None = None,
 ) -> str:
     """병렬 수집 중 사용할 충돌 없는 Evidence key를 만든다.
 
     기술명은 URL 인코딩해 key 구분자인 ``:``가 기술명 안에 들어와도 파싱할 수
     있게 한다. ``ordinal``은 해당 에이전트 실행 내에서 증가시키는 값이다.
+    orchestrator 서브 태스크로 실행되면 같은 (관점, 기술, round)에 초점이 다른 실행이
+    동시에 돌므로 ``focus``를 key에 넣어 충돌을 막는다.
     """
 
     encoded_tech = quote(tech, safe="")
+    if focus:
+        return f"{perspective}:{attempt}:{encoded_tech}:{focus}:{ordinal:06d}"
     return f"{perspective}:{attempt}:{encoded_tech}:{ordinal:06d}"
 
 
-def _parse_key(key: str) -> tuple[str, int, str, int]:
-    """정렬을 위해 임시 key를 구성 요소로 분해한다."""
+def _parse_key(key: str) -> tuple[str, int, str, str, int]:
+    """정렬을 위해 임시 key를 (관점, 시도, 기술, 초점, 순번)으로 분해한다."""
 
-    parts = key.split(":", 3)
-    if len(parts) != 4:
-        return ("legacy", 0, "", 0)
-    perspective, attempt_text, encoded_tech, ordinal_text = parts
+    parts = key.split(":")
+    if len(parts) == 4:
+        perspective, attempt_text, encoded_tech, ordinal_text = parts
+        focus = ""
+    elif len(parts) == 5:
+        perspective, attempt_text, encoded_tech, focus, ordinal_text = parts
+    else:
+        return ("legacy", 0, "", "", 0)
     try:
         attempt = int(attempt_text)
     except ValueError:
@@ -63,7 +74,7 @@ def _parse_key(key: str) -> tuple[str, int, str, int]:
         ordinal = int(ordinal_text)
     except ValueError:
         ordinal = 0
-    return perspective, attempt, unquote(encoded_tech), ordinal
+    return perspective, attempt, unquote(encoded_tech), focus, ordinal
 
 
 def _as_evidence(item: Evidence | dict[str, Any]) -> Evidence:
@@ -129,7 +140,7 @@ def _remap_view_result(
                 ],
             }
         )
-    return result.model_copy(update={"by_tech": by_tech})
+    return result.model_copy(update={"by_tech": by_tech, "replace": True})
 
 
 def _dedupe_references(references: Iterable[Reference | dict[str, Any]]) -> list[Reference]:
@@ -199,11 +210,13 @@ def finalize_evidence(state: AgentState) -> dict[str, Any]:
 
     def sort_key(item: tuple[str, Evidence]) -> tuple[Any, ...]:
         key, evidence = item
-        perspective, attempt, key_tech, ordinal = _parse_key(key)
+        perspective, attempt, key_tech, focus, ordinal = _parse_key(key)
         return (
             _PERSPECTIVE_ORDER.get(perspective, 99),
             tech_order.get(key_tech or evidence.tech, 99),
             attempt,
+            focus == "counter",
+            focus,
             ordinal,
             key,
             evidence.tech,
@@ -212,14 +225,27 @@ def finalize_evidence(state: AgentState) -> dict[str, Any]:
 
     entries.sort(key=sort_key)
 
+    # 품질 평가 Loop로 finalize가 다시 실행되면 이미 확정된 번호를 그대로 유지하고
+    # 새 근거만 뒤에 이어 붙인다. 앞 round의 Claim이 정수 번호로 참조하고 있어서
+    # 재정렬하면 번호가 다른 근거를 가리키게 된다.
+    assigned: dict[str, int] = {
+        e.key: e.id for e in (state.get("evidence") or []) if e.key and e.id is not None
+    }
     key_to_id: dict[str, int] = {}
     legacy_id_to_id: dict[int, int] = {}
     final_evidence: list[Evidence] = []
-    for final_id, (key, evidence) in enumerate(entries, 1):
+    next_id = max(assigned.values(), default=0) + 1
+    for key, evidence in entries:
+        if key in assigned:
+            final_id = assigned[key]
+        else:
+            final_id = next_id
+            next_id += 1
         key_to_id[key] = final_id
         if evidence.id is not None:
             legacy_id_to_id.setdefault(evidence.id, final_id)
         final_evidence.append(evidence.model_copy(update={"id": final_id, "key": key}))
+    final_evidence.sort(key=lambda e: e.id)
 
     valid_ids = set(key_to_id.values())
     updates: dict[str, Any] = {
