@@ -149,3 +149,88 @@ def validate_plan(picks: list[_Pick], techs: list[str], max_subtasks: int) -> tu
 
     subtasks = [_subtask(0, p, t, f, reasons[(p, f, t)]) for p, f, t in ordered]
     return subtasks, corrections
+
+
+def _executed(state: AgentState) -> set[tuple[str, str, str]]:
+    """지금까지 실행을 마친 (관점, 초점, 기술). node_status의 subtask_id에서 읽음."""
+    done: set[tuple[str, str, str]] = set()
+    for subtask_id, status in (state.get("node_status") or {}).items():
+        parts = subtask_id.split(":", 3)
+        if len(parts) == 4 and status == "done":
+            _, perspective, focus, tech = parts
+            done.add((perspective, focus, tech))
+    return done
+
+
+def _format_profiles(profiles: dict[str, TechProfile]) -> str:
+    if not profiles:
+        return "(기술 조사 결과 없음)"
+    blocks = []
+    for name, p in profiles.items():
+        p = p if isinstance(p, TechProfile) else TechProfile.model_validate(p)
+        blocks.append(
+            f"- {name}\n  개요: {p.overview}\n  적용 범위: {p.scope}\n  한계: {p.limitations}\n  차별점: {p.differentiation}"
+        )
+    return "\n".join(blocks)
+
+
+class OrchestratorAgent(BaseAgent):
+    name = "orchestrator"
+    uses_rag = False
+
+    def __init__(self, mode: str | None = None, llm: Any | None = None, max_subtasks: int | None = None):
+        self.mode = (mode or config.PLANNER_MODE).lower()
+        self._llm = llm
+        self.max_subtasks = max_subtasks or config.MAX_SUBTASKS
+
+    def run(self, state: AgentState) -> dict[str, Any]:
+        round_ = state.get("plan_round", -1) + 1
+        techs = [t.name for t in state.get("techs", []) or []]
+        plan = self._initial_plan(state, techs) if round_ == 0 else self._replan(state, round_)
+
+        log_decision(
+            state.get("trace_id"),
+            self.name,
+            f"round {plan.round}: 서브 태스크 {len(plan.subtasks)}개",
+            plan.rationale,
+            subtasks=[s.subtask_id for s in plan.subtasks],
+            corrections=plan.corrections,
+        )
+        return {
+            "plan": plan,
+            "plan_round": round_,
+            "pending_gaps": [],
+            "planned_subtasks": plan.subtasks,
+            # 계획 시점에 pending으로 기록. 중단 후 재개하면 pending으로 남은 작업이 미완료 작업임
+            "node_status": {s.subtask_id: "pending" for s in plan.subtasks},
+        }
+
+    # -- round 0 -----------------------------------------------------------------
+
+    def _initial_plan(self, state: AgentState, techs: list[str]) -> Plan:
+        picks: list[_Pick] = []
+        if self.mode == "llm":
+            picks, rationale = self._draft(state, techs)
+        else:
+            rationale = "rule 모드: 칸마다 기본 초점 하나"
+        subtasks, corrections = validate_plan(picks, techs, self.max_subtasks)
+        return Plan(round=0, subtasks=subtasks, rationale=rationale, corrections=corrections)
+
+    def _draft(self, state: AgentState, techs: list[str]) -> tuple[list[_Pick], str]:
+        prompt = _PROMPT.format(
+            techs=", ".join(techs),
+            domain=state.get("domain", ""),
+            profiles=_format_profiles(state.get("tech_profiles", {}) or {}),
+            catalog=format_catalog(),
+            max_subtasks=self.max_subtasks,
+        )
+        try:
+            llm = (self._llm or get_generation_llm()).with_structured_output(_PlanDraft)
+            draft: _PlanDraft = llm.invoke(prompt)  # type: ignore[assignment]
+        except Exception as exc:  # noqa: BLE001 - 계획 실패는 검증 단계의 기본 계획으로 대체
+            reason = f"계획 LLM 실패({type(exc).__name__}: {exc}). 칸마다 기본 초점 하나로 대체"
+            log_decision(state.get("trace_id"), self.name, "fallback_rule_plan", reason)
+            return [], reason
+        return draft.picks, draft.rationale
+
+    # -- round 1+ ----------------------------------------------------------------
