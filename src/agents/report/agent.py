@@ -520,6 +520,14 @@ def build_report_json(
 
 def write_report_json(data: dict[str, Any], path: Path = _REPORT_JSON_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    # 품질 평가 Loop로 보고서를 다시 쓰면 같은 실행의 이전 평가 이력을 이어 붙임
+    if path.exists() and data.get("trace_id"):
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            previous = {}
+        if previous.get("trace_id") == data["trace_id"] and previous.get("quality_eval_history"):
+            data["quality_eval_history"] = previous["quality_eval_history"]
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
