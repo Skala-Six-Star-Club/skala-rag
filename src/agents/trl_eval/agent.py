@@ -20,6 +20,7 @@ from langchain_community.vectorstores import FAISS
 
 from src.common import config
 from src.common.base_agent import BaseAgent
+from src.common.focus import COUNTER, get_focus
 from src.common.state import AgentState, Evidence, Reference, TechViewResult, ViewResult
 from src.common.tools import (
     extract_view_result,
@@ -59,7 +60,16 @@ class TrlEvalAgent(BaseAgent):
 
     def run(self, state: AgentState) -> dict[str, Any]:
         techs = self.scoped_techs(state)  # Send fan-out이면 기술 하나, 아니면 전체
-        is_retry = self.name in (state.get("retry_targets") or [])
+        spec = self.focus_spec(state, "trl")
+        if spec is None:
+            # 단독 실행: 기존 1차 수집(estimate 질의) 또는 재검색(counter 질의), 필수 항목 전체
+            spec = get_focus("trl", COUNTER if self.focus(state) == COUNTER else "estimate")
+            required, extra = REQUIRED_ITEMS, EXTRA_INSTRUCTIONS
+        else:
+            # 서브 태스크: 초점 하나의 질의와 그 초점의 필수 항목만. TRL 구간 서식은 estimate 초점만
+            required = list(spec.items)
+            extra = EXTRA_INSTRUCTIONS if spec.id == "estimate" else ""
+        followup = self.is_followup(state)
         prior = state.get("trl_result")
         new_evidence: list[Evidence] = []
         new_references: list[Reference] = []
