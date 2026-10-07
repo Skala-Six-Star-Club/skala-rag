@@ -137,6 +137,10 @@ def verify_citations(original_text: str, candidate_text: str, valid_ids: set[int
     cited = {int(n) for n in _CITATION_RE.findall(candidate_text)}
     if not cited.issubset(valid_ids):
         return original_text
+    # 다듬는 과정에서 원문의 인용이 빠지면 근거 없는 문장이 생기므로 원문으로 되돌림
+    original = {int(n) for n in _CITATION_RE.findall(original_text)}
+    if not original.issubset(cited):
+        return original_text
     return candidate_text
 
 
