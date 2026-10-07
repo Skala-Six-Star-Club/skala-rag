@@ -31,6 +31,8 @@ _PERSPECTIVE_ORDER = {
 }
 
 
+
+
 def make_provisional_key(
     perspective: str,
     tech: str,
@@ -208,11 +210,13 @@ def finalize_evidence(state: AgentState) -> dict[str, Any]:
 
     def sort_key(item: tuple[str, Evidence]) -> tuple[Any, ...]:
         key, evidence = item
-        perspective, attempt, key_tech, ordinal = _parse_key(key)
+        perspective, attempt, key_tech, focus, ordinal = _parse_key(key)
         return (
             _PERSPECTIVE_ORDER.get(perspective, 99),
             tech_order.get(key_tech or evidence.tech, 99),
             attempt,
+            focus == "counter",
+            focus,
             ordinal,
             key,
             evidence.tech,
