@@ -141,8 +141,9 @@ LangSmith에서는 프로젝트 `LANGSMITH_PROJECT`의 `trace:<trace_id>` 태그
 
 ## Contributors
 
-- 박기연 : RAG 실습의 이해관계자, 도메인 평가 에이전트와 대칭 질의 템플릿 / Agent 실습의 Orchestrator-Workers 전환(orchestrator, Dynamic Fan-out, worker Fall-back, quality_eval, State Schema 재구획, 관측성과 체크포인트)
-- 신소영 : RAG 파이프라인 설계(청크 분할, 메타데이터 스키마), 임베딩 모델 선정, FAISS 색인과 검색 평가 스크립트
-- 최광원 : 생성, 검수 LLM 선정과 프롬프트 템플릿, OpenAI 연동과 Ollama 검수 모델 서빙
-- 문관록 : 시장 평가 에이전트, Tavily 웹 검색 도구
-- 임채현 : State, Graph 아키텍처, 근거 점검 재시도 로직, 기술 성숙도 에이전트
+- 임채현 : State Schema와 관측성. 관점 결과 reducer, 계획과 평가 스키마, 작업 페이로드와 제어 메타데이터 분리, 근거 key와 번호 안정화, 설정, 결정 로그와 LangSmith 상관, 체크포인트
+- 신소영 : Orchestrator와 계획. 초점 카탈로그, 계획 검증과 보정, 최초 계획과 부족 칸 재계획, Dynamic Fan-out과 라우팅
+- 이준영 : Worker와 실행 안정성. 관점 worker 4종의 초점 단위 실행, 노드 래퍼, worker Fall-back(재시도 후 제외), 임베딩 호출 직렬화
+- 문관록 : 근거 점검과 종합. evidence_check 부족 칸 재계획 요청, synthesize 문장 단위 근거 구조화, 보고서 인용 무결성과 출처 다양성
+- 최광원 : 보고서 품질 평가. quality_eval의 커버리지, 편향 통제, 중립성, Groundedness Hybrid 판정과 Loop 예산, 최종 판정 표
+- 박기연 : 보고서, 그래프 통합, 문서. 보고서 JSON과 한계점, Orchestrator-Workers 그래프 조립, 실행 진입점과 재개, 흐름 검증 스크립트, README
