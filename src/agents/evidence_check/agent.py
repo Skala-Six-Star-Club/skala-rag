@@ -223,6 +223,18 @@ class EvidenceCheckAgent(BaseAgent):
             if needs_retry and budget_left:
                 retry_targets.append(agent_name)
                 retry_scopes[agent_name] = [t for t in techs if t in short_techs]
+                gaps.extend(
+                    Gap(
+                        perspective=perspective,
+                        tech=t,
+                        # 반대 근거가 없으면 반대 근거 초점, 근거 수나 균형 문제면 orchestrator가 그 칸에서
+                        # 아직 조사하지 않은 초점을 고름
+                        focus="counter" if "반대 근거 0건" in reasons[t] else None,
+                        reason=", ".join(reasons[t]),
+                        source="evidence_check",
+                    )
+                    for t in retry_scopes[agent_name]
+                )
 
             target_count = max(config.TARGET_EVIDENCE_COUNT, 1)
             confidence[perspective] = {
