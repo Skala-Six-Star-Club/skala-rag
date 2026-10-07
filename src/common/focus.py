@@ -82,4 +82,58 @@ FOCI: dict[str, dict[str, FocusSpec]] = {
             ),
         ),
     },
+    "stakeholder": {
+        "competitor": FocusSpec(
+            "competitor", "경쟁 진영", ("경쟁 진영의 반응과 대응 기술",), "경쟁 진영의 반응과 대응 기술",
+            web=(("{tech} {anchor} 경쟁 기술 반응", '"{tech}" {anchor} competitors response'),),
+        ),
+        "developer": FocusSpec(
+            "developer", "개발자와 도입 기업", ("도입 기업과 개발자의 의견과 도입 장벽",), "도입 기업과 개발자 커뮤니티의 의견, 도입 장벽",
+            web=(("{tech} {anchor} 개발자 커뮤니티 반응", '"{tech}" {anchor} developer community reaction'),),
+        ),
+        "investor": FocusSpec(
+            "investor", "투자 업계", ("투자 업계의 평가",), "투자자, 애널리스트의 평가",
+            web=(("{tech} {anchor} 투자 업계 평가", '"{tech}" {anchor} investors analysts'),),
+        ),
+        COUNTER: FocusSpec(
+            COUNTER, "이해관계자 반론", ("경쟁사 반박, 개발자 불만, 투자 리스크",), "경쟁사 반박, 개발자 불만, 투자 리스크(반대 근거)",
+            web=(
+                ("{tech} {anchor} 경쟁사 반박", '"{tech}" {anchor} competitor rebuttal'),
+                ("{tech} {anchor} 개발자 불만 한계", '"{tech}" {anchor} developer complaints limitations'),
+                ("{tech} {anchor} 투자 리스크", '"{tech}" {anchor} investment risk'),
+            ),
+        ),
+    },
+    "domain": {
+        "cache_reuse": FocusSpec(
+            "cache_reuse", "캐시 재사용", ("세션 간 캐시 재사용에 미치는 영향",), "멀티턴 세션 간 prefix cache 재사용에 미치는 영향",
+            paper="{tech} {domain} 멀티턴 세션 간 prefix cache 재사용",
+            web=(("{tech} {anchor} prefix cache 재사용 멀티턴", '"{tech}" {anchor} prefix cache reuse multi-turn'),),
+        ),
+        "latency": FocusSpec(
+            "latency", "응답 지연", ("턴당 응답 지연",), "턴당 응답 지연, TTFT, 처리량",
+            paper="{tech} {domain} 턴당 지연 시간, TTFT, 처리량",
+            web=(("{tech} {anchor} 지연 시간 처리량 서빙", '"{tech}" {anchor} latency throughput serving'),),
+        ),
+        "storage_cost": FocusSpec(
+            "storage_cost", "캐시 보관 비용", ("캐시 보관 비용(메모리, 저장 장치)",), "KV cache를 보관하는 메모리, 저장 장치 비용",
+            paper="{tech} {domain} KV cache 메모리 사용량과 저장 비용",
+            web=(("{tech} {anchor} KV cache 메모리 비용 저장 장치", '"{tech}" {anchor} KV cache memory cost storage'),),
+        ),
+        "accuracy": FocusSpec(
+            "accuracy", "정확도 유지", ("누적 턴에서의 정확도 유지",), "긴 문맥과 누적 턴에서의 정확도 유지",
+            paper="{tech} {domain} 긴 문맥과 누적 턴에서의 정확도 유지",
+            web=(("{tech} {anchor} 장문맥 정확도 저하", '"{tech}" {anchor} long context accuracy degradation'),),
+        ),
+        "integration": FocusSpec(
+            "integration", "도입 변경 범위", ("도입에 필요한 하드웨어와 소프트웨어 변경 범위",), "도입에 필요한 하드웨어, 소프트웨어 변경 범위",
+            paper="{tech} {domain} 도입에 필요한 하드웨어 요구사항과 소프트웨어 변경",
+            web=(("{tech} {anchor} 서빙 프레임워크 도입 요구사항", '"{tech}" {anchor} serving framework requirements'),),
+        ),
+        COUNTER: FocusSpec(
+            COUNTER, "도메인 적용 한계", ("도메인 적용의 한계와 실패 사례",), "에이전트 코딩 서빙에 적용할 때의 한계와 실패 사례(반대 근거)",
+            paper="{tech} {domain} 한계와 실패 사례, 후속 검증",
+            web=(("{tech} {anchor} 한계 실패 사례", '"{tech}" {anchor} limitations failure cases'),),
+        ),
+    },
 }
