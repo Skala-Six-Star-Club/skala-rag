@@ -162,46 +162,62 @@ def build_default_graph(index: FAISS | None = None, checkpointer: Any | None = N
 
 
 # ---------------------------------------------------------------------------
-# 통합 실행 (schedule.md 1절 마지막 단계, 8.3 Loop Efficiency 원자료)
+# 통합 실행
 # ---------------------------------------------------------------------------
 
 
 def summarize_run(final_state: AgentState) -> dict[str, Any]:
-    """8.3 Agent System 지표 집계에 쓰는 실행 1회 요약."""
+    """실행 1회 요약. 동적 동작(계획된 worker 수, re-plan, Loop)을 trace와 대조할 수 있게 남김."""
     evidence = final_state.get("evidence", [])
     per_perspective: dict[str, dict[str, int]] = {}
     for e in evidence:
         bucket = per_perspective.setdefault(f"{e.perspective}/{e.tech}", {"지지": 0, "반대": 0})
         bucket[e.stance] += 1
+    trace_id = final_state.get("trace_id")
+    decisions = read_decisions(trace_id) if trace_id else []
+    plans = [d for d in decisions if d["node"] == "orchestrator" and d["decision"].startswith("round")]
+    verdict = final_state.get("eval_result")
     return {
+        "trace_id": trace_id,
+        "run_id": final_state.get("run_id"),
+        "plans": [{"decision": p["decision"], "subtasks": p.get("subtasks", [])} for p in plans],
+        "node_status": dict(Counter((final_state.get("node_status") or {}).values())),
+        "excluded_subtasks": [s.subtask_id for s in final_state.get("excluded_subtasks", []) or []],
+        "task_errors": final_state.get("task_errors", {}),
         "retry_count": final_state.get("retry_count", 0),
         "rewrite_count": final_state.get("rewrite_count", 0),
+        "eval_count": final_state.get("eval_count", 0),
+        "quality_replan_count": final_state.get("quality_replan_count", 0),
+        "quality_rewrite_count": final_state.get("quality_rewrite_count", 0),
+        "quality_passed": verdict.passed if verdict is not None else None,
+        "quality_criteria": {c.name: c.passed for c in verdict.criteria} if verdict is not None else {},
+        "step_count": final_state.get("step_count", 0),
         "evidence_total": len(evidence),
         "evidence_by_perspective_tech": per_perspective,
-        "perspective_confidence": final_state.get("perspective_confidence", {}),
-        "overall_confidence": (
-            final_state["synthesis"].overall_confidence
-            if final_state.get("synthesis") is not None
-            else 0.0
-        ),
-        "weakest_perspective": (
-            final_state["synthesis"].weakest_perspective
-            if final_state.get("synthesis") is not None
-            else None
-        ),
-        "judge_feedback": (
-            final_state["judge_feedback"].model_dump()
-            if final_state.get("judge_feedback") is not None
-            else None
-        ),
         "report_path": final_state.get("report_path"),
+        "decision_log": str(config.DECISION_LOG_DIR / f"{trace_id}.jsonl") if trace_id else None,
     }
 
 
+def run(trace_id: str | None = None, resume: bool = False) -> dict[str, Any]:
+    """그래프 1회 실행. resume=True면 같은 trace_id의 마지막 체크포인트에서 이어서 실행함."""
+    from src.orchestration.checkpoint import make_checkpointer
+
+    if resume and not trace_id:
+        raise ValueError("재개하려면 trace_id가 필요함")
+    trace_id = trace_id or new_trace_id()
+    run_id = str(uuid.uuid4())
+    graph = build_default_graph(checkpointer=make_checkpointer())
+    cfg = {**run_config(trace_id), "run_id": run_id}  # LangSmith 루트 run id를 지정해 로그와 잇기
+    log_decision(trace_id, "app", "resume" if resume else "start", "그래프 실행", run_id=run_id)
+    final_state: AgentState = graph.invoke(None if resume else {"trace_id": trace_id, "run_id": run_id}, config=cfg)
+    summary = summarize_run(final_state)
+    log_decision(trace_id, "app", "end", "그래프 종료", summary={k: summary[k] for k in ("eval_count", "quality_passed", "step_count")})
+    return summary
+
+
 def main() -> None:
-    graph = build_default_graph()
-    final_state: AgentState = graph.invoke({}, config={"recursion_limit": 50})
-    print(json.dumps(summarize_run(final_state), ensure_ascii=False, indent=2))
+    print(json.dumps(run(), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
