@@ -21,7 +21,8 @@ import numpy as np
 from src.common import config
 from src.common.base_agent import BaseAgent
 from src.common.models import get_embedding_model
-from src.common.state import AgentState, Claim, Evidence, TechViewResult, ViewResult
+from src.common.observability import log_decision
+from src.common.state import AgentState, Claim, Evidence, Gap, TechViewResult, ViewResult
 
 _MIN_EVIDENCE = 3
 _MAX_RATIO = 2.0
@@ -119,7 +120,7 @@ def _filter_view_result(
             counter_facts=kept_counter,
             unconfirmed_items=tech_result.unconfirmed_items,
         )
-    return ViewResult(by_tech=new_by_tech)
+    return ViewResult(by_tech=new_by_tech, replace=True)
 
 
 def _has_claims(view_result: ViewResult) -> bool:
@@ -147,9 +148,11 @@ class EvidenceCheckAgent(BaseAgent):
         if evidence is None or (not evidence and state.get("evidence")):
             evidence = state.get("evidence", [])
         evidence = list(evidence or [])
+        # 품질 평가 Loop로 다시 들어오면 앞 round의 Claim은 확정 번호(evidence_ids)만
+        # 갖고 있으므로 finalize가 쓴 확정 evidence도 번호 조회에 포함한다.
         evidence_by_id = {
             evidence_item.id: evidence_item
-            for evidence_item in evidence
+            for evidence_item in [*(state.get("evidence") or []), *evidence]
             if evidence_item.id is not None
         }
         evidence_by_key = {
@@ -164,6 +167,7 @@ class EvidenceCheckAgent(BaseAgent):
         # 노드 이름 -> 부족한 기술 목록. graph.py가 (노드, 기술)별 Send 재검색에 씀.
         retry_scopes: dict[str, list[str]] = {}
         confidence: dict[str, dict[str, float]] = {}
+        gaps: list[Gap] = []
         embed = None  # Claim이 실제로 있을 때만 bge-m3를 지연 로딩한다.
 
         for perspective, agent_name in _PERSPECTIVE_TO_AGENT.items():
@@ -180,17 +184,20 @@ class EvidenceCheckAgent(BaseAgent):
             }
             # 규칙 1~3을 기술별로 평가해 부족한 기술만 재검색 범위에 넣는다.
             # (규칙 3 불균형은 근거가 적은 쪽 기술이 대상)
-            short_techs: set[str] = {
-                tech for tech in techs
-                if totals[tech] < _MIN_EVIDENCE or counts[tech]["반대"] == 0
-            }
+            reasons: dict[str, list[str]] = defaultdict(list)
+            for tech in techs:
+                if totals[tech] < _MIN_EVIDENCE:
+                    reasons[tech].append(f"근거 {totals[tech]}건 < {_MIN_EVIDENCE}")
+                if counts[tech]["반대"] == 0:
+                    reasons[tech].append("반대 근거 0건")
             nonzero = [total for total in totals.values() if total > 0]
             if (
                 len(totals) == 2
                 and len(nonzero) == 2
                 and max(nonzero) / min(nonzero) > _MAX_RATIO
             ):
-                short_techs.add(min(techs, key=lambda t: totals[t]))
+                reasons[min(techs, key=lambda t: totals[t])].append(f"기술 간 근거 비율 > {_MAX_RATIO:g}배")
+            short_techs: set[str] = set(reasons)
             needs_retry = bool(short_techs)
 
             # 규칙 4: 결과에 Claim이 있을 때만 그라운딩을 수행한다. 현재 담당
@@ -210,11 +217,24 @@ class EvidenceCheckAgent(BaseAgent):
                         tech_result.confirmed_facts or tech_result.counter_facts
                     ):
                         short_techs.add(tech)
+                        reasons[tech].append("그라운딩 후 남은 주장 없음")
                         needs_retry = True
 
             if needs_retry and budget_left:
                 retry_targets.append(agent_name)
                 retry_scopes[agent_name] = [t for t in techs if t in short_techs]
+                gaps.extend(
+                    Gap(
+                        perspective=perspective,
+                        tech=t,
+                        # 반대 근거가 없으면 반대 근거 초점, 근거 수나 균형 문제면 orchestrator가 그 칸에서
+                        # 아직 조사하지 않은 초점을 고름
+                        focus="counter" if "반대 근거 0건" in reasons[t] else None,
+                        reason=", ".join(reasons[t]),
+                        source="evidence_check",
+                    )
+                    for t in retry_scopes[agent_name]
+                )
 
             target_count = max(config.TARGET_EVIDENCE_COUNT, 1)
             confidence[perspective] = {
@@ -226,4 +246,17 @@ class EvidenceCheckAgent(BaseAgent):
         updates["retry_scopes"] = retry_scopes
         updates["retry_count"] = retry_count + (1 if retry_targets else 0)
         updates["perspective_confidence"] = confidence
+        updates["pending_gaps"] = gaps
+        if gaps:
+            log_decision(
+                state.get("trace_id"), self.name, "replan",
+                "근거 부족 (관점, 기술)을 orchestrator에 재계획 요청",
+                gaps=[g.model_dump() for g in gaps],
+            )
+        else:
+            log_decision(
+                state.get("trace_id"), self.name, "finalize",
+                "근거 충분" if budget_left else "재검색 예산 소진, 부족 항목은 미확인으로 진행",
+                retry_count=retry_count,
+            )
         return updates
