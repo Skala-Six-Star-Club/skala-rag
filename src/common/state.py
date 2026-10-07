@@ -231,48 +231,64 @@ def keep_last(left: str | None, right: str | None) -> str | None:
 
 
 class AgentState(TypedDict, total=False):
-    """LangGraph 그래프 전체가 공유하는 State (11장 표)."""
+    """LangGraph 그래프 전체가 공유하는 State.
 
+    설계 원칙:
+    - 작업 페이로드와 제어 메타데이터를 구획으로 나눔. 라우팅 함수는 제어 구획만 읽음.
+    - 결정 사유와 로그 본문은 State에 넣지 않고 observability 계층(JSONL, LangSmith)으로
+      내보내며, ``trace_id``로 State와 외부 로그를 잇음.
+    - 병렬 worker가 함께 쓰는 필드는 모두 Reducer를 둠.
+    """
+
+    # -- 작업 페이로드 ---------------------------------------------------------
     techs: list[TechSpec]
     domain: str
     tech_profiles: dict[str, TechProfile]
 
-    # (관점, 기술) 단위 병렬 실행이 같은 관점 필드에 동시에 쓰므로 기술 키로 합침
+    # 같은 관점 필드에 여러 서브 태스크가 동시에 쓰므로 기술 키로 이어 붙임
     trl_result: Annotated[ViewResult, merge_view_results]
     market_result: Annotated[ViewResult, merge_view_results]
     stakeholder_result: Annotated[ViewResult, merge_view_results]
     domain_result: Annotated[ViewResult, merge_view_results]
 
-    # Send fan-out으로 관점 노드를 호출할 때 그래프가 넣어 주는 실행 범위(기술명 하나).
-    # 없으면 노드는 techs 전체를 처리함(독립 실행 스크립트, 레거시 호환).
-    tech_scope: str
-
-    # 여러 병렬 노드가 쓰는 누적 영역. evidence_finalize 이후에도 감사/디버깅용으로
-    # 남겨 두지만, 보고서와 인용 검증은 아래의 확정된 evidence를 사용한다.
+    # 병렬 worker의 누적 영역(임시 key). evidence_finalize가 아래 확정 결과로 정리함.
     raw_evidence: Annotated[list[Evidence], operator.add]
     raw_references: Annotated[list[Reference], operator.add]
-
-    # evidence_finalize가 한 번에 기록하는 확정 결과(덮어쓰기 필드).
     evidence: list[Evidence]
     references: list[Reference]
-    evidence_finalized: bool
+
+    perspective_confidence: dict[str, dict[str, float]]
+    synthesis: Synthesis
+    judge_feedback: JudgeFeedback  # 단독 judge 노드 호환용. 통합 그래프는 eval_result를 씀
+    eval_result: EvalVerdict
+
+    # 보고서 본문은 파일로만 두고 State에는 경로만 둠(체크포인트 크기 관리)
+    report_path: str
+    report_json_path: str
+
+    # -- 제어 메타데이터 (조정, 종료, 재개에 필요한 최소치) ------------------------
+    trace_id: str  # 외부 로그, LangSmith 메타데이터, 체크포인트 thread_id와 잇는 상관 키
+    run_id: str  # LangSmith 루트 run id(실행 1회). 재개하면 새 run id가 결정 로그에 남음
+    plan: Plan  # 현재 round의 계획. 다음 re-plan이 덮어씀
+    planned_subtasks: Annotated[list[SubTask], operator.add]  # 모든 round에서 계획된 서브 태스크
+    plan_round: int
+    pending_gaps: list[Gap]  # orchestrator가 다음 round에서 처리할 부족 칸
+    excluded_subtasks: Annotated[list[SubTask], operator.add]  # Fall-back으로 제외된 작업
+
+    # Send payload 전용. worker 하나가 맡은 서브 태스크와 기술명
+    subtask: SubTask
+    tech_scope: str
 
     retry_targets: list[str]
-    # 재검색을 기술 단위로 좁히기 위한 범위: 노드 이름 -> 부족한 기술명 목록.
-    # evidence_check가 채우고 graph.py가 (노드, 기술)별 Send로 씀. 비어 있으면 전체 기술.
     retry_scopes: dict[str, list[str]]
     retry_count: int
     rewrite_count: int
+    eval_count: int
+    quality_replan_count: int  # quality_eval이 orchestrator 재계획을 요청한 횟수
+    quality_rewrite_count: int  # quality_eval이 synthesize 재작성을 요청한 횟수
+    evidence_finalized: bool
 
-    # evidence_check가 계산한 관점별·기술별 근거량 점수(0~1).
-    perspective_confidence: dict[str, dict[str, float]]
-
-    synthesis: Synthesis
-    # 12장 "반복 2"(judge -> synthesize 재작성, 1회 한정)의 횟수. 11장 표에는 없지만
-    # retry_count와 같은 역할이라 추가함. synthesize가 쓰고 그래프 조건 분기가 읽음.
-    rewrite_count: int
-    judge_feedback: JudgeFeedback
-
-    report_md: str
-    report_path: str
-    report_json_path: str
+    node_status: Annotated[dict[str, str], merge_dicts]  # subtask_id -> pending(계획), done, excluded
+    task_errors: Annotated[dict[str, str], merge_dicts]  # subtask_id -> 마지막 오류. 재개 시 실패 원인 확인용
+    last_error: Annotated[str | None, keep_last]
+    step_count: Annotated[int, operator.add]  # 노드 실행 수. 종료 가드
