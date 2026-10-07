@@ -21,7 +21,8 @@ import numpy as np
 from src.common import config
 from src.common.base_agent import BaseAgent
 from src.common.models import get_embedding_model
-from src.common.state import AgentState, Claim, Evidence, TechViewResult, ViewResult
+from src.common.observability import log_decision
+from src.common.state import AgentState, Claim, Evidence, Gap, TechViewResult, ViewResult
 
 _MIN_EVIDENCE = 3
 _MAX_RATIO = 2.0
@@ -166,6 +167,7 @@ class EvidenceCheckAgent(BaseAgent):
         # 노드 이름 -> 부족한 기술 목록. graph.py가 (노드, 기술)별 Send 재검색에 씀.
         retry_scopes: dict[str, list[str]] = {}
         confidence: dict[str, dict[str, float]] = {}
+        gaps: list[Gap] = []
         embed = None  # Claim이 실제로 있을 때만 bge-m3를 지연 로딩한다.
 
         for perspective, agent_name in _PERSPECTIVE_TO_AGENT.items():
@@ -182,17 +184,20 @@ class EvidenceCheckAgent(BaseAgent):
             }
             # 규칙 1~3을 기술별로 평가해 부족한 기술만 재검색 범위에 넣는다.
             # (규칙 3 불균형은 근거가 적은 쪽 기술이 대상)
-            short_techs: set[str] = {
-                tech for tech in techs
-                if totals[tech] < _MIN_EVIDENCE or counts[tech]["반대"] == 0
-            }
+            reasons: dict[str, list[str]] = defaultdict(list)
+            for tech in techs:
+                if totals[tech] < _MIN_EVIDENCE:
+                    reasons[tech].append(f"근거 {totals[tech]}건 < {_MIN_EVIDENCE}")
+                if counts[tech]["반대"] == 0:
+                    reasons[tech].append("반대 근거 0건")
             nonzero = [total for total in totals.values() if total > 0]
             if (
                 len(totals) == 2
                 and len(nonzero) == 2
                 and max(nonzero) / min(nonzero) > _MAX_RATIO
             ):
-                short_techs.add(min(techs, key=lambda t: totals[t]))
+                reasons[min(techs, key=lambda t: totals[t])].append(f"기술 간 근거 비율 > {_MAX_RATIO:g}배")
+            short_techs: set[str] = set(reasons)
             needs_retry = bool(short_techs)
 
             # 규칙 4: 결과에 Claim이 있을 때만 그라운딩을 수행한다. 현재 담당
@@ -212,11 +217,24 @@ class EvidenceCheckAgent(BaseAgent):
                         tech_result.confirmed_facts or tech_result.counter_facts
                     ):
                         short_techs.add(tech)
+                        reasons[tech].append("그라운딩 후 남은 주장 없음")
                         needs_retry = True
 
             if needs_retry and budget_left:
                 retry_targets.append(agent_name)
                 retry_scopes[agent_name] = [t for t in techs if t in short_techs]
+                gaps.extend(
+                    Gap(
+                        perspective=perspective,
+                        tech=t,
+                        # 반대 근거가 없으면 반대 근거 초점, 근거 수나 균형 문제면 orchestrator가 그 칸에서
+                        # 아직 조사하지 않은 초점을 고름
+                        focus="counter" if "반대 근거 0건" in reasons[t] else None,
+                        reason=", ".join(reasons[t]),
+                        source="evidence_check",
+                    )
+                    for t in retry_scopes[agent_name]
+                )
 
             target_count = max(config.TARGET_EVIDENCE_COUNT, 1)
             confidence[perspective] = {
