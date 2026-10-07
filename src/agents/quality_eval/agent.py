@@ -221,3 +221,89 @@ def verify_judgment(judgment: "_NeutralityJudgment", sections: dict[str, str]) -
         else:
             uncited.append(flag)
     return judgment.model_copy(update={"biased_sentences": biased, "sentences_without_evidence": uncited}), dropped
+
+
+def decide_route(criteria: list[CriterionResult], gaps: list[Gap], replans_left: bool, rewrites_left: bool) -> str:
+    failed = {c.name for c in criteria if not c.passed}
+    if failed & DATA_CRITERIA and gaps and replans_left:
+        return "orchestrator"
+    if failed & TEXT_CRITERIA and rewrites_left:
+        return "synthesize"
+    return "end"
+
+
+class QualityEvalAgent(BaseAgent):
+    name = "quality_eval"
+    uses_rag = False
+
+    def __init__(self, embed: Any | None = None, judge_llm: Any | None = None, use_llm: bool | None = None):
+        self._embed = embed
+        self._judge_llm = judge_llm
+        self.use_llm = config.QUALITY_USE_LLM_JUDGE if use_llm is None else use_llm
+        self._trace_id: str | None = None
+
+    def run(self, state: AgentState) -> dict[str, Any]:
+        trace_id = state.get("trace_id")
+        self._trace_id = trace_id
+        attempt = state.get("eval_count", 0)
+        report = load_report_json(state.get("report_json_path"))
+        sections: dict[str, str] = report.get("evidence_token_sections") or {}
+        evidence = list(state.get("evidence") or [])
+        evidence_by_id = {e.id: e for e in evidence if e.id is not None}
+        techs = [t.name for t in state.get("techs", []) or []]
+
+        coverage, coverage_gaps = check_coverage(sections, evidence_by_id, techs)
+        bias, bias_gaps = check_bias_control(sections, evidence_by_id, techs)
+        judgment = self._judge(sections, trace_id)
+        criteria = [
+            self._groundedness(sections, evidence_by_id, judgment),
+            self._neutrality(sections, judgment),
+            bias,
+            coverage,
+        ]
+        if not sections:
+            criteria = [
+                CriterionResult(name=c.name, passed=False, method=c.method, issues=["report.json의 평가 본문 없음"])
+                for c in criteria
+            ]
+
+        gaps = [*coverage_gaps, *bias_gaps]
+        replans = state.get("quality_replan_count", 0)
+        rewrites = state.get("quality_rewrite_count", 0)
+        route = decide_route(
+            criteria, gaps, replans < config.MAX_QUALITY_REPLANS, rewrites < config.MAX_QUALITY_REWRITES
+        )
+        passed = all(c.passed for c in criteria)
+        verdict = EvalVerdict(
+            passed=passed,
+            criteria=criteria,
+            gaps=gaps if route == "orchestrator" else [],
+            route=route,  # type: ignore[arg-type]
+            attempt=attempt,
+        )
+
+        reason = "모든 항목 통과" if passed else "; ".join(
+            f"{c.name}: {', '.join(c.issues[:2])}" for c in criteria if not c.passed
+        )
+        if not passed and route == "end":
+            reason = f"Loop 예산 소진(재계획 {replans}/{config.MAX_QUALITY_REPLANS}, 재작성 {rewrites}/{config.MAX_QUALITY_REWRITES}). {reason}"
+        log_decision(
+            trace_id, self.name, f"route={route}", reason,
+            attempt=attempt, criteria={c.name: c.passed for c in criteria},
+        )
+        self._append_to_report(state.get("report_json_path"), verdict)
+        if route == "end":
+            from src.agents.report.agent import append_quality_result
+
+            append_quality_result(verdict, state.get("report_json_path"))
+
+        updates: dict[str, Any] = {
+            "eval_result": verdict,
+            "eval_count": attempt + 1,
+            "pending_gaps": verdict.gaps,
+            "quality_replan_count": replans + (route == "orchestrator"),
+            "quality_rewrite_count": rewrites + (route == "synthesize"),
+        }
+        return updates
+
+    # -- LLM, 임베딩 판정 ---------------------------------------------------------
