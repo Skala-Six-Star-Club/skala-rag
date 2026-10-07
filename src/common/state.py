@@ -220,6 +220,16 @@ class EvalVerdict(BaseModel):
         return [i for c in self.criteria if c.name in names and not c.passed for i in c.issues]
 
 
+def merge_dicts(left: dict | None, right: dict | None) -> dict:
+    """병렬 worker가 같은 dict 필드(node_status)에 동시에 쓰는 갱신을 키 단위로 합침."""
+    return {**(left or {}), **(right or {})}
+
+
+def keep_last(left: str | None, right: str | None) -> str | None:
+    """병렬 갱신 중 마지막 값만 남김. 같은 superstep에서 여러 worker가 실패해도 충돌하지 않음."""
+    return right if right is not None else left
+
+
 class AgentState(TypedDict, total=False):
     """LangGraph 그래프 전체가 공유하는 State (11장 표)."""
 
