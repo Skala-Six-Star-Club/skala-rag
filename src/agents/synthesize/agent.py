@@ -36,17 +36,19 @@ from src.common.state import AgentState, Claim, Conflict, Synthesis, ViewResult
 from src.common.tools import strip_citation_tokens
 
 _PROMPT_TEMPLATE = """\
-아래는 TurboQuant(SW)와 ITME(HW) 두 기술에 대한 4개 관점(기술 성숙도, 시장성,
-이해관계자, 도메인 적용) 평가 결과임. 이를 종합해:
+아래는 {tech_pair} 두 기술에 대한 4개 관점(기술 성숙도, 시장성,
+이해관계자, 도메인 적용) 평가 결과임. 각 줄 끝의 (근거 3, 7)이 그 사실의 근거 번호임. 이를 종합해:
 - 일치점 1건 이상
 - 상충점 1건 이상(단순 나열이 아니라 왜 갈리는지 설명 포함)
-- 1/2쪽 이내 SUMMARY (관점 4종을 한 줄씩 언급, 가장 큰 상충 지점 명시)
-를 작성해줘. 우열 판정 표현은 쓰지 말고, 모든 문장에 근거 번호를 붙여줘.
+- 1/2쪽 이내 SUMMARY (관점 4종을 한 문장씩 언급, 가장 큰 상충 지점 명시)
+를 작성해줘. 우열 판정 표현은 쓰지 않음.
 
-[기술 성숙도] {trl_result}
-[시장성] {market_result}
-[이해관계자] {stakeholder_result}
-[도메인 적용] {domain_result}
+출력 규칙:
+1. 모든 문장은 text(근거 번호 표기 없이 한 문장)와 evidence_ids(그 문장의 근거가 된 번호 목록)로 나눠 씀
+2. evidence_ids에는 아래 평가 결과에 실제로 적힌 근거 번호만 넣음. 근거 번호를 댈 수 없는 문장은 쓰지 않음
+3. 여러 관점의 사실을 묶는 문장이면 각 관점의 근거 번호를 모두 넣음
+
+{views}
 
 [관점별 근거 신뢰도(0~1, evidence_check가 근거량 기준으로 계산함)]
 {confidence}
