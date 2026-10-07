@@ -28,9 +28,11 @@ from src.common.base_agent import BaseAgent
 from src.common.models import get_generation_llm
 from src.common.state import (
     AgentState,
+    EvalVerdict,
     Evidence,
     JudgeFeedback,
     Reference,
+    SubTask,
     Synthesis,
     TechProfile,
     TechSpec,
@@ -382,14 +384,37 @@ def collect_unconfirmed_items(*results: ViewResult | None) -> list[str]:
     return list(seen)
 
 
-def render_limitations(judge_feedback: JudgeFeedback | None, unconfirmed_items: list[str] | None = None) -> str:
-    """공개 정보 한계 + 미확인 항목 + 편향 완화 조치 + judge_feedback 반영(9.5절).
+_PERSPECTIVE_NAME_BY_KEY = {"trl": "기술 성숙도", "market": "시장성", "stakeholder": "이해관계자", "domain": "도메인 적용"}
+
+
+def _focus_label(subtask: SubTask) -> str:
+    from src.common.focus import is_valid_focus, get_focus
+
+    if is_valid_focus(subtask.perspective, subtask.focus):
+        return get_focus(subtask.perspective, subtask.focus).label
+    return subtask.focus
+
+
+def render_limitations(
+    judge_feedback: JudgeFeedback | None,
+    unconfirmed_items: list[str] | None = None,
+    excluded_subtasks: list[SubTask] | None = None,
+    eval_result: EvalVerdict | None = None,
+) -> str:
+    """공개 정보 한계 + 미확인 항목 + 제외된 조사 + 편향 완화 조치 + 검수 결과(9.5절).
     10장 관계사 고지는 여기 넣지 않고 run()이 다듬기 이후에 덧붙임."""
     parts = [f"### 공개 정보 기반 추정의 한계\n\n{_PUBLIC_INFO_LIMITATION}"]
 
     if unconfirmed_items:
         items = "\n".join(f"- {i}" for i in unconfirmed_items)
         parts.append(f"### 확인하지 못한 항목\n\n{items}")
+
+    if excluded_subtasks:
+        items = "\n".join(
+            f"- {s.tech}, {_PERSPECTIVE_NAME_BY_KEY.get(s.perspective, s.perspective)}, {_focus_label(s)}"
+            for s in excluded_subtasks
+        )
+        parts.append(f"### 실행 오류로 제외된 조사\n\n재시도 후에도 실패해 결과에 반영하지 못한 조사 항목임.\n\n{items}")
 
     parts.append(f"### 확증 편향을 줄이기 위한 조치\n\n{_BIAS_MITIGATION}")
 
@@ -554,7 +579,12 @@ class ReportAgent(BaseAgent):
             "3. 기술 개요": render_tech_overview(tech_profiles),
             "4. 관점별 평가": render_view_evaluation(*view_results, techs),
             "5. 시사점": render_implications(synthesis),
-            "6. 한계점": render_limitations(judge_feedback, collect_unconfirmed_items(*view_results)),
+            "6. 한계점": render_limitations(
+                judge_feedback,
+                collect_unconfirmed_items(*view_results),
+                state.get("excluded_subtasks"),
+                state.get("eval_result"),
+            ),
         }
 
         sections = {title: normalize_citations(body) for title, body in sections.items()}
