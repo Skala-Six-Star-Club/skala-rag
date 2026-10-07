@@ -20,6 +20,7 @@ from langchain_community.vectorstores import FAISS
 
 from src.common import config
 from src.common.base_agent import BaseAgent
+from src.common.focus import COUNTER, get_focus
 from src.common.state import AgentState, Evidence, Reference, TechViewResult, ViewResult
 from src.common.tools import (
     extract_view_result,
@@ -59,7 +60,16 @@ class TrlEvalAgent(BaseAgent):
 
     def run(self, state: AgentState) -> dict[str, Any]:
         techs = self.scoped_techs(state)  # Send fan-out이면 기술 하나, 아니면 전체
-        is_retry = self.name in (state.get("retry_targets") or [])
+        spec = self.focus_spec(state, "trl")
+        if spec is None:
+            # 단독 실행: 기존 1차 수집(estimate 질의) 또는 재검색(counter 질의), 필수 항목 전체
+            spec = get_focus("trl", COUNTER if self.focus(state) == COUNTER else "estimate")
+            required, extra = REQUIRED_ITEMS, EXTRA_INSTRUCTIONS
+        else:
+            # 서브 태스크: 초점 하나의 질의와 그 초점의 필수 항목만. TRL 구간 서식은 estimate 초점만
+            required = list(spec.items)
+            extra = EXTRA_INSTRUCTIONS if spec.id == "estimate" else ""
+        followup = self.is_followup(state)
         prior = state.get("trl_result")
         new_evidence: list[Evidence] = []
         new_references: list[Reference] = []
@@ -69,10 +79,8 @@ class TrlEvalAgent(BaseAgent):
             self.last_queries = {}
 
         for tech in techs:
-            # 12장 "반복 1": 재검색 시 질의 초점을 한계·실패 사례·후속 검증으로 바꿈
-            focus = "한계와 실패 사례, 후속 검증" if is_retry else "구현과 공식 발표 현황, 실험 수준, 공개 구현"
-            paper_query = self.rewrite_query(f"{tech.name} {focus}", tech.name)
-            web_query = f"{tech.name} {tech.search_anchor} " + ("한계 실패 사례 후속 검증" if is_retry else "제품 발표 오픈소스 구현 TRL")
+            paper_query = self.rewrite_query(spec.paper.format(tech=tech.name), tech.name)
+            web_query = spec.web[0][0].format(tech=tech.name, anchor=tech.search_anchor)
             self.last_queries[tech.name] = {"paper": paper_query, "web": web_query}
 
             paper_docs = paper_search(self.index, paper_query, k=config.DEFAULT_TOP_K, role="target", tech=tech.name)
@@ -116,16 +124,16 @@ class TrlEvalAgent(BaseAgent):
             # 재검색 시 1차 결과의 미확인 항목만 이어받음(7.3절 Context 및 Memory)
             prior_unconfirmed = (
                 list(prior.by_tech[tech.name].unconfirmed_items)
-                if is_retry and prior is not None and tech.name in prior.by_tech
+                if followup and prior is not None and tech.name in prior.by_tech
                 else None
             )
             view = extract_view_result(
                 passages,
                 tech.name,
                 PERSPECTIVE_LABEL,
-                REQUIRED_ITEMS,
+                required,
                 key_by_num,
-                extra_instructions=EXTRA_INSTRUCTIONS,
+                extra_instructions=extra,
                 prior_unconfirmed=prior_unconfirmed,
             )
             by_tech[tech.name] = view
