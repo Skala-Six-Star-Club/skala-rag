@@ -100,3 +100,6 @@ TARGET_EVIDENCE_COUNT = int(os.getenv("TARGET_EVIDENCE_COUNT", "5"))
 #   none:    본문에서 인용 표기를 모두 제거(REFERENCE 절과 report.json의 근거 번호는 유지)
 #   raw:     [근거#N] 토큰을 그대로 둠(디버깅용)
 REPORT_CITATION_STYLE = os.getenv("REPORT_CITATION_STYLE", "numeric").strip().lower()
+# 관점별 평가 절에서 (관점, 기술) 칸당 싣는 주장 수 상한. 보고서 10장 상한을 지키기 위함(0이면 제한 없음)
+REPORT_MAX_CLAIMS_PER_CELL = int(os.getenv("REPORT_MAX_CLAIMS_PER_CELL", "5"))
+
