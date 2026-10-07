@@ -31,30 +31,41 @@ _PERSPECTIVE_ORDER = {
 }
 
 
+
+
 def make_provisional_key(
     perspective: str,
     tech: str,
     *,
     attempt: int = 0,
     ordinal: int,
+    focus: str | None = None,
 ) -> str:
     """병렬 수집 중 사용할 충돌 없는 Evidence key를 만든다.
 
     기술명은 URL 인코딩해 key 구분자인 ``:``가 기술명 안에 들어와도 파싱할 수
     있게 한다. ``ordinal``은 해당 에이전트 실행 내에서 증가시키는 값이다.
+    orchestrator 서브 태스크로 실행되면 같은 (관점, 기술, round)에 초점이 다른 실행이
+    동시에 돌므로 ``focus``를 key에 넣어 충돌을 막는다.
     """
 
     encoded_tech = quote(tech, safe="")
+    if focus:
+        return f"{perspective}:{attempt}:{encoded_tech}:{focus}:{ordinal:06d}"
     return f"{perspective}:{attempt}:{encoded_tech}:{ordinal:06d}"
 
 
-def _parse_key(key: str) -> tuple[str, int, str, int]:
-    """정렬을 위해 임시 key를 구성 요소로 분해한다."""
+def _parse_key(key: str) -> tuple[str, int, str, str, int]:
+    """정렬을 위해 임시 key를 (관점, 시도, 기술, 초점, 순번)으로 분해한다."""
 
-    parts = key.split(":", 3)
-    if len(parts) != 4:
-        return ("legacy", 0, "", 0)
-    perspective, attempt_text, encoded_tech, ordinal_text = parts
+    parts = key.split(":")
+    if len(parts) == 4:
+        perspective, attempt_text, encoded_tech, ordinal_text = parts
+        focus = ""
+    elif len(parts) == 5:
+        perspective, attempt_text, encoded_tech, focus, ordinal_text = parts
+    else:
+        return ("legacy", 0, "", "", 0)
     try:
         attempt = int(attempt_text)
     except ValueError:
@@ -63,7 +74,7 @@ def _parse_key(key: str) -> tuple[str, int, str, int]:
         ordinal = int(ordinal_text)
     except ValueError:
         ordinal = 0
-    return perspective, attempt, unquote(encoded_tech), ordinal
+    return perspective, attempt, unquote(encoded_tech), focus, ordinal
 
 
 def _as_evidence(item: Evidence | dict[str, Any]) -> Evidence:
@@ -199,11 +210,13 @@ def finalize_evidence(state: AgentState) -> dict[str, Any]:
 
     def sort_key(item: tuple[str, Evidence]) -> tuple[Any, ...]:
         key, evidence = item
-        perspective, attempt, key_tech, ordinal = _parse_key(key)
+        perspective, attempt, key_tech, focus, ordinal = _parse_key(key)
         return (
             _PERSPECTIVE_ORDER.get(perspective, 99),
             tech_order.get(key_tech or evidence.tech, 99),
             attempt,
+            focus == "counter",
+            focus,
             ordinal,
             key,
             evidence.tech,
