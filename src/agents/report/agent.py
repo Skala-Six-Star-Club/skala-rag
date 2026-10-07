@@ -409,7 +409,9 @@ def render_limitations(
     parts = [f"### 공개 정보 기반 추정의 한계\n\n{_PUBLIC_INFO_LIMITATION}"]
 
     if unconfirmed_items:
-        items = "\n".join(f"- {i}" for i in unconfirmed_items)
+        items = "\n".join(f"- {i}" for i in unconfirmed_items[:_MAX_UNCONFIRMED_TOTAL])
+        if len(unconfirmed_items) > _MAX_UNCONFIRMED_TOTAL:
+            items += f"\n- 외 {len(unconfirmed_items) - _MAX_UNCONFIRMED_TOTAL}건(관점별 평가 절의 미확인 항목 참고)"
         parts.append(f"### 확인하지 못한 항목\n\n{items}")
 
     if excluded_subtasks:
