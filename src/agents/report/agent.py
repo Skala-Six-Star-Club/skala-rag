@@ -395,8 +395,11 @@ def render_view_evaluation(
     stakeholder_result: ViewResult | None,
     domain_result: ViewResult | None,
     techs: list[TechSpec],
+    evidence: list[Evidence] | None = None,
 ) -> str:
     """4개 관점을 순서대로, 관점마다 두 기술을 나란히 서술(9.5절, 13장)."""
+    # 근거 번호 -> 출처(참고문헌 URL). 칸당 주장을 고를 때 출처 다양성을 보려고 씀
+    source_of = {e.id: e.reference_url or e.source for e in evidence or [] if e.id is not None}
     results = {
         "trl": trl_result,
         "market": market_result,
@@ -409,7 +412,7 @@ def render_view_evaluation(
         block = [f"### 4.{idx} {_PERSPECTIVE_LABELS[key]}"]
         for name in _tech_names(techs):
             view = result.by_tech.get(name) if result is not None else None
-            block.append(_render_tech_view(name, view))
+            block.append(_render_tech_view(name, view, source_of))
         parts.append("\n\n".join(block))
     return "\n\n".join(parts)
 
@@ -660,7 +663,7 @@ class ReportAgent(BaseAgent):
             "1. 분석 배경": render_background(techs, tech_profiles),
             "2. 기술 선정": render_tech_selection(techs),
             "3. 기술 개요": render_tech_overview(tech_profiles),
-            "4. 관점별 평가": render_view_evaluation(*view_results, techs),
+            "4. 관점별 평가": render_view_evaluation(*view_results, techs, state.get("evidence", [])),
             "5. 시사점": render_implications(synthesis),
             "6. 한계점": render_limitations(
                 judge_feedback,
