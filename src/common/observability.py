@@ -54,3 +54,19 @@ def read_decisions(trace_id: str) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def langsmith_enabled() -> bool:
+    flag = os.getenv("LANGSMITH_TRACING", os.getenv("LANGCHAIN_TRACING_V2", "")).lower()
+    return flag in {"1", "true"} and bool(os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY"))
+
+
+def run_config(trace_id: str, *, recursion_limit: int | None = None) -> dict[str, Any]:
+    """graph.invoke에 넘길 config. thread_id(체크포인트)와 LangSmith metadata를 같은 키로 둠."""
+    return {
+        "configurable": {"thread_id": trace_id},
+        "run_name": "kv-cache-orchestrator-workers",
+        "tags": ["orchestrator-workers", f"trace:{trace_id}"],
+        "metadata": {"trace_id": trace_id},
+        "recursion_limit": recursion_limit or config.RECURSION_LIMIT,
+    }
