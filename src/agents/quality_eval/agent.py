@@ -128,3 +128,43 @@ def check_coverage(sections: dict[str, str], evidence_by_id: dict[int, Evidence]
         ),
         gaps,
     )
+
+
+def check_bias_control(sections: dict[str, str], evidence_by_id: dict[int, Evidence], techs: list[str]) -> tuple[CriterionResult, list[Gap]]:
+    ids = {i for body in sections.values() for i in _cited_ids(body)}
+    cited = [evidence_by_id[i] for i in ids if i in evidence_by_id and evidence_by_id[i].perspective in _PERSPECTIVES]
+    sources: dict[tuple[str, str], set[str]] = defaultdict(set)
+    per_tech: dict[str, int] = {t: 0 for t in techs}
+    counter_by_tech: dict[str, int] = {t: 0 for t in techs}
+    for e in cited:
+        sources[(e.perspective, e.tech)].add(e.reference_url or e.source)
+        per_tech[e.tech] = per_tech.get(e.tech, 0) + 1
+        if e.stance == "반대":
+            counter_by_tech[e.tech] = counter_by_tech.get(e.tech, 0) + 1
+
+    issues: list[str] = []
+    gaps: list[Gap] = []
+    for (perspective, tech), srcs in sorted(sources.items()):
+        if len(srcs) < config.QUALITY_MIN_SOURCES:
+            issues.append(f"{perspective}/{tech}: 인용 출처 {len(srcs)}곳(단일 출처 편중)")
+            gaps.append(Gap(perspective=perspective, tech=tech, reason="단일 출처 편중", source="quality_eval"))
+    for tech in techs:
+        if counter_by_tech.get(tech, 0) == 0:
+            issues.append(f"{tech}: 인용된 반대 근거 없음")
+            gaps.extend(
+                Gap(perspective=p, tech=tech, focus="counter", reason="반대 근거 인용 없음", source="quality_eval")
+                for p in _PERSPECTIVES
+                if (p, tech) in sources
+            )
+    counts = [c for c in per_tech.values() if c > 0]
+    if len(counts) == len(techs) >= 2 and max(counts) / min(counts) > config.QUALITY_MAX_RATIO:
+        low = min(per_tech, key=per_tech.get)
+        issues.append(f"기술 간 인용 수 비율 {max(counts)}:{min(counts)} > {config.QUALITY_MAX_RATIO:g}")
+        gaps.extend(
+            Gap(perspective=p, tech=low, reason="기술 간 인용 불균형", source="quality_eval")
+            for p in _PERSPECTIVES
+        )
+    unique: dict[tuple[str, str, str], Gap] = {}
+    for g in gaps:
+        unique.setdefault((g.perspective, g.tech, g.focus), g)
+    return CriterionResult(name="bias_control", passed=not issues, method="rule", issues=issues), list(unique.values())
