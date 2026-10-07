@@ -225,14 +225,27 @@ def finalize_evidence(state: AgentState) -> dict[str, Any]:
 
     entries.sort(key=sort_key)
 
+    # 품질 평가 Loop로 finalize가 다시 실행되면 이미 확정된 번호를 그대로 유지하고
+    # 새 근거만 뒤에 이어 붙인다. 앞 round의 Claim이 정수 번호로 참조하고 있어서
+    # 재정렬하면 번호가 다른 근거를 가리키게 된다.
+    assigned: dict[str, int] = {
+        e.key: e.id for e in (state.get("evidence") or []) if e.key and e.id is not None
+    }
     key_to_id: dict[str, int] = {}
     legacy_id_to_id: dict[int, int] = {}
     final_evidence: list[Evidence] = []
-    for final_id, (key, evidence) in enumerate(entries, 1):
+    next_id = max(assigned.values(), default=0) + 1
+    for key, evidence in entries:
+        if key in assigned:
+            final_id = assigned[key]
+        else:
+            final_id = next_id
+            next_id += 1
         key_to_id[key] = final_id
         if evidence.id is not None:
             legacy_id_to_id.setdefault(evidence.id, final_id)
         final_evidence.append(evidence.model_copy(update={"id": final_id, "key": key}))
+    final_evidence.sort(key=lambda e: e.id)
 
     valid_ids = set(key_to_id.values())
     updates: dict[str, Any] = {
