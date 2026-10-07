@@ -307,3 +307,35 @@ class QualityEvalAgent(BaseAgent):
         return updates
 
     # -- LLM, 임베딩 판정 ---------------------------------------------------------
+
+    def _judge(self, sections: dict[str, str], trace_id: str | None) -> _NeutralityJudgment | None:
+        if not self.use_llm or not sections:
+            return None
+        text = "\n\n".join(f"[{t}]\n{sections.get(t, '')}" for t in _NARRATIVE_SECTIONS)
+        try:
+            llm = (self._judge_llm or get_judge_llm()).with_structured_output(_NeutralityJudgment)
+            judgment: _NeutralityJudgment = llm.invoke(_JUDGE_PROMPT.format(text=text))  # type: ignore[assignment]
+        except Exception as exc:  # noqa: BLE001 - 검수 모델이 없으면 규칙 판정만 반영
+            log_decision(trace_id, self.name, "llm_judge_skipped", f"{type(exc).__name__}: {exc}")
+            return None
+        judgment, dropped = verify_judgment(judgment, sections)
+        if dropped:
+            log_decision(
+                trace_id, self.name, "llm_judge_filtered",
+                f"보고서 문장과 대조되지 않거나 근거 번호가 있는 지적 {dropped}건을 버림",
+            )
+        return judgment
+
+    def _neutrality(self, sections: dict[str, str], judgment: _NeutralityJudgment | None) -> CriterionResult:
+        issues = [f"금지 표현: {s}" for s in check_biased_phrases(sections)]
+        method = "rule"
+        if judgment is not None:
+            method = "hybrid"
+            # 한 기술의 한계만 서술하거나 두 기술을 대비하는 문장까지 잡는 과잉 지적을 줄이려고
+            # 우열 판정, 도입 추천으로 분류된 문장만 위반으로 셈
+            issues += [
+                f"LLM 지적({f.kind}): {f.sentence}"
+                for f in judgment.biased_sentences
+                if f.kind != "해당 없음" and f.sentence.strip()
+            ]
+        return CriterionResult(name="neutrality", passed=not issues, method=method, issues=issues)  # type: ignore[arg-type]
