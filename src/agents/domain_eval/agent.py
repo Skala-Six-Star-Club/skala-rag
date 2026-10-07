@@ -19,6 +19,7 @@ from langchain_community.vectorstores import FAISS
 
 from src.common import config
 from src.common.base_agent import BaseAgent
+from src.common.focus import COUNTER
 from src.common.state import AgentState, Evidence, Reference, TechViewResult, ViewResult
 from src.common.tools import (
     extract_view_result,
@@ -63,6 +64,12 @@ EXTRA_INSTRUCTIONS = (
 )
 WEB_MAX_RESULTS = 5
 
+# 단독 실행(서브 태스크 없음) 질의. 1차 수집은 필수 항목 전체를 한 번에 묻고, 재검색은 한계를 물음
+_LEGACY_QUERIES = {
+    "base": ("실험 환경과 요구 하드웨어, 지연 시간, 메모리 비용", "서빙 프레임워크 지연시간 메모리"),
+    COUNTER: ("한계와 실패 사례, 후속 검증", "한계 실패 사례"),
+}
+
 
 class DomainEvalAgent(BaseAgent):
     name = "domain_eval"
@@ -76,7 +83,9 @@ class DomainEvalAgent(BaseAgent):
     def run(self, state: AgentState) -> dict[str, Any]:
         techs = self.scoped_techs(state)  # Send fan-out이면 기술 하나, 아니면 전체
         domain = state["domain"]
-        is_retry = self.name in (state.get("retry_targets") or [])
+        spec = self.focus_spec(state, "domain")
+        required = REQUIRED_ITEMS if spec is None else list(spec.items)
+        followup = self.is_followup(state)
         prior = state.get("domain_result")
         new_evidence: list[Evidence] = []
         new_references: list[Reference] = []
