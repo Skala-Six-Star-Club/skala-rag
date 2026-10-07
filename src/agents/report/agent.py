@@ -666,6 +666,24 @@ def render_quality_result(verdict: EvalVerdict) -> str:
     return head + "\n\n" + "\n".join(rows)
 
 
+def append_quality_result(verdict: EvalVerdict, report_json_path: str | Path | None) -> bool:
+    """같은 실행의 report.md에 최종 품질 평가 결과를 REFERENCE 앞(한계점 절 끝)에 넣고 PDF를 다시 만듦."""
+    if not report_json_path:
+        return False
+    md_path = Path(report_json_path).with_suffix(".md")
+    pdf_path = Path(report_json_path).with_suffix(".pdf")
+    if not md_path.exists():
+        return False
+    md = md_path.read_text(encoding="utf-8")
+    section = f"\n### 최종 품질 평가 결과\n\n{render_quality_result(verdict)}\n"
+    marker = "\n## REFERENCE"
+    md = md.replace(marker, section + marker, 1) if marker in md else md + section
+    md_path.write_text(md, encoding="utf-8")
+    if pdf_path.exists():
+        convert_to_pdf(md, pdf_path)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # 노드
 # ---------------------------------------------------------------------------
