@@ -221,3 +221,12 @@ def verify_judgment(judgment: "_NeutralityJudgment", sections: dict[str, str]) -
         else:
             uncited.append(flag)
     return judgment.model_copy(update={"biased_sentences": biased, "sentences_without_evidence": uncited}), dropped
+
+
+def decide_route(criteria: list[CriterionResult], gaps: list[Gap], replans_left: bool, rewrites_left: bool) -> str:
+    failed = {c.name for c in criteria if not c.passed}
+    if failed & DATA_CRITERIA and gaps and replans_left:
+        return "orchestrator"
+    if failed & TEXT_CRITERIA and rewrites_left:
+        return "synthesize"
+    return "end"
