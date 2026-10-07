@@ -106,18 +106,15 @@ def build_graph(nodes: dict[str, NodeFn], checkpointer: Any | None = None) -> Co
 
 
 # ---------------------------------------------------------------------------
-# 실제 비즈니스 에이전트 10개 조립 (Doc Pool 색인은 RAG 3종이 공유함, 5장)
+# 실제 노드 조립 (Doc Pool 색인은 RAG 3종이 공유함, 5장)
 # ---------------------------------------------------------------------------
 
 
 def load_or_build_doc_pool_index(index_dir: Path = config.DOC_POOL_INDEX_DIR) -> FAISS:
     """Doc Pool 공유 색인을 `index_dir/<임베딩 이름>/`에서 로드하거나 없으면 구축함.
 
-    scripts/{agent}/pdf/v1/index 는 청킹·임베딩 비교실험용이라 건드리지 않고,
-    그래프 실행용 색인은 별도 경로에 둠. 임베딩 이름별 하위 폴더를 쓰는 이유는
-    채택 임베딩을 바꿨을 때(bge-m3 -> Qwen3-Embedding, 둘 다 1024차원) 이전 모델로
-    만든 색인이 차원 검사에 걸리지 않고 조용히 로드되는 사고를 막기 위함.
-    실제 로직은 tools.get_shared_index와 같음(RAG 3종 독립 실행과 색인을 공유).
+    임베딩 이름별 하위 폴더를 쓰는 이유는 채택 임베딩을 바꿨을 때 이전 모델로 만든
+    색인이 차원 검사에 걸리지 않고 조용히 로드되는 사고를 막기 위함.
     """
     from src.common.tools import _embedding_dir_name, get_shared_index
 
@@ -125,11 +122,11 @@ def load_or_build_doc_pool_index(index_dir: Path = config.DOC_POOL_INDEX_DIR) ->
 
 
 def make_agents(index: FAISS | None = None) -> dict[str, NodeFn]:
-    """설계서 4장 표의 에이전트 10개와 내부 finalizer를 노드로 돌려줌."""
+    """조정 계층(orchestrator)과 하위 에이전트, 내부 finalizer를 노드로 돌려줌."""
     from src.agents.domain_eval.agent import DomainEvalAgent
     from src.agents.evidence_check.agent import EvidenceCheckAgent
-    from src.agents.judge.agent import JudgeAgent
     from src.agents.market_eval.agent import MarketEvalAgent
+    from src.agents.quality_eval.agent import QualityEvalAgent
     from src.agents.report.agent import ReportAgent
     from src.agents.select_tech.agent import SelectTechAgent
     from src.agents.stakeholder_eval.agent import StakeholderEvalAgent
@@ -137,6 +134,7 @@ def make_agents(index: FAISS | None = None) -> dict[str, NodeFn]:
     from src.agents.tech_research.agent import TechResearchAgent
     from src.agents.trl_eval.agent import TrlEvalAgent
     from src.common.evidence import finalize_evidence
+    from src.orchestration.orchestrator import OrchestratorAgent
 
     if index is None:
         index = load_or_build_doc_pool_index()
@@ -144,22 +142,23 @@ def make_agents(index: FAISS | None = None) -> dict[str, NodeFn]:
     agents = [
         SelectTechAgent(),
         TechResearchAgent(index),
+        OrchestratorAgent(),
         TrlEvalAgent(index),
         MarketEvalAgent(),
         StakeholderEvalAgent(),
         DomainEvalAgent(index),
         EvidenceCheckAgent(),
         SynthesizeAgent(),
-        JudgeAgent(),
         ReportAgent(),
+        QualityEvalAgent(),
     ]
     nodes: dict[str, NodeFn] = {agent.name: agent for agent in agents}
     nodes[NODE_EVIDENCE_FINALIZE] = finalize_evidence
     return nodes
 
 
-def build_default_graph(index: FAISS | None = None) -> CompiledStateGraph:
-    return build_graph(make_agents(index))
+def build_default_graph(index: FAISS | None = None, checkpointer: Any | None = None) -> CompiledStateGraph:
+    return build_graph(make_agents(index), checkpointer=checkpointer)
 
 
 # ---------------------------------------------------------------------------
