@@ -96,3 +96,54 @@ graph TD
 
 조사와 서술이 모두 미달이면 재조사를 먼저 하고, 재조사 뒤 다시 실행되는 synthesize가 서술 지적도 함께 반영함.
 판정 결과는 `output/report.json`의 `quality_eval`, `quality_eval_history`에 남고, 최종 판정은 보고서 한계점 절의 "최종 품질 평가 결과" 표로도 실림.
+
+## Directory Structure
+
+```
+├── app.py                     # 실행 스크립트 (실행, 재개)
+├── configs/tech_selection.json  # 선정 기술과 도메인 (Human 기반 선정)
+├── data/doc_pool/             # 문서 풀 (arXiv PDF 6편, git 미추적)
+├── src/
+│   ├── graph.py               # 그래프 조립과 통합 실행
+│   ├── orchestration/         # 조정 계층
+│   │   ├── orchestrator.py         # Orchestrator: 서브 태스크 계획, re-plan
+│   │   ├── routing.py         # Dynamic Fan-out, 조건 분기
+│   │   ├── worker.py          # 노드 공통 래퍼, worker Fall-back
+│   │   └── checkpoint.py      # 체크포인터
+│   ├── agents/                # 하위 에이전트 (각 폴더의 agent.py)
+│   │   ├── trl_eval/ market_eval/ stakeholder_eval/ domain_eval/   # workers
+│   │   ├── synthesize/        # synthesizer
+│   │   ├── evidence_check/ quality_eval/
+│   │   └── select_tech/ tech_research/ report/ judge/
+│   └── common/                # State, 초점 카탈로그(focus.py), 도구, 모델 로더, 근거 번호 확정, 관측성
+├── scripts/                   # 에이전트별 테스트 러너, 그래프 흐름 검증
+├── eval/golden/               # 검색 평가 골든셋
+├── docs/                      # 설계서, RAG 실습 README
+└── output/                    # 실행 결과 저장 (보고서, 결정 로그, 체크포인트, git 미추적)
+```
+
+`judge/`는 단독 검수 에이전트로 남겨 두었고, 통합 그래프에서는 `quality_eval`이 같은 검수 모델로 중립성 판정을 맡음.
+
+## Usage
+
+```bash
+pip install -r requirements.txt
+cp .env.example .env           # OPENAI_API_KEY, TAVILY_API_KEY, LANGSMITH_API_KEY 입력
+ollama pull qwen3:8b           # 검수 모델
+
+python app.py                  # 실행. 끝나면 trace_id와 실행 요약 출력
+python app.py --resume <trace_id>   # 중단된 실행 재개
+python -m scripts.graph_flow_check  # API 키 없이 그래프 흐름 검증(stub)
+```
+
+실행 결과는 `output/report.md`, `output/report.pdf`, `output/report.json`, 결정 로그는 `output/logs/<trace_id>.jsonl`.
+LangSmith에서는 프로젝트 `LANGSMITH_PROJECT`의 `trace:<trace_id>` 태그로 같은 실행을 찾음.
+
+## Contributors
+
+- 임채현 : State Schema와 관측성. 관점 결과 reducer, 계획과 평가 스키마, 작업 페이로드와 제어 메타데이터 분리, 근거 key와 번호 안정화, 설정, 결정 로그와 LangSmith 상관, 체크포인트
+- 신소영 : Orchestrator와 계획. 초점 카탈로그, 계획 검증과 보정, 최초 계획과 부족 칸 재계획, Dynamic Fan-out과 라우팅
+- 이준영 : Worker와 실행 안정성. 관점 worker 4종의 초점 단위 실행, 노드 래퍼, worker Fall-back(재시도 후 제외), 임베딩 호출 직렬화
+- 문관록 : 근거 점검과 종합. evidence_check 부족 칸 재계획 요청, synthesize 문장 단위 근거 구조화, 보고서 인용 무결성과 출처 다양성
+- 최광원 : 보고서 품질 평가. quality_eval의 커버리지, 편향 통제, 중립성, Groundedness Hybrid 판정과 Loop 예산, 최종 판정 표
+- 박기연 : 보고서, 그래프 통합, 문서. 보고서 JSON과 한계점, Orchestrator-Workers 그래프 조립, 실행 진입점과 재개, 흐름 검증 스크립트, README
