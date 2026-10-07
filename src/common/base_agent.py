@@ -121,8 +121,11 @@ class BaseAgent(ABC):
         )
 
     def evidence_attempt(self, state: AgentState) -> int:
-        """현재 실행이 초기 수집인지 재시도인지 반환한다."""
+        """현재 실행의 수집 회차. 서브 태스크면 계획 round, 아니면 재시도 여부."""
 
+        subtask = state.get("subtask")
+        if subtask is not None:
+            return subtask.round
         return 1 if self.name in (state.get("retry_targets", []) or []) else 0
 
     def provisional_evidence_key(
@@ -134,9 +137,11 @@ class BaseAgent(ABC):
         """병렬 수집 단계에서 사용할 임시 Evidence key를 만든다."""
 
         perspective = self.name.removesuffix("_eval")
+        subtask = state.get("subtask")
         return make_provisional_key(
             perspective,
             tech,
             attempt=self.evidence_attempt(state),
             ordinal=ordinal,
+            focus=subtask.focus if subtask is not None else None,
         )
